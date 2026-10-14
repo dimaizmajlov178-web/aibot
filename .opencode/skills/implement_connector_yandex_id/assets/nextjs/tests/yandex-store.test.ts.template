@@ -1,0 +1,139 @@
+import assert from "node:assert/strict";
+import { test, mock } from "node:test";
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  GetCommand,
+  UpdateCommand,
+  TransactWriteCommand,
+} from "@aws-sdk/lib-dynamodb";
+import { createDynamoAuthStore } from "../lib/auth/dynamodb";
+
+function client() {
+  return DynamoDBDocumentClient.from(
+    new DynamoDBClient({
+      region: "test",
+      credentials: { accessKeyId: "fake", secretAccessKey: "fake" },
+    })
+  );
+}
+test("transaction consume binds expiry, pending state and redirect URI in one conditional write", async () => {
+  const db = client();
+  const send = mock.method(db, "send", async () => ({}));
+  await createDynamoAuthStore(db, "auth").consumeTransaction(
+    "hashed",
+    "https://app.example.com/callback",
+    100
+  );
+  const command = send.mock.calls[0].arguments[0] as UpdateCommand;
+  assert.ok(command instanceof UpdateCommand);
+  assert.equal(
+    command.input.ConditionExpression,
+    "#status = :pending AND expiresAt > :now AND redirectUri = :uri"
+  );
+  assert.equal(
+    command.input.ExpressionAttributeValues?.[":uri"],
+    "https://app.example.com/callback"
+  );
+  assert.equal(
+    command.input.ExpressionAttributeValues?.[":consumed"],
+    "consumed"
+  );
+});
+test("new identity and session are created atomically without persisting raw provider data", async () => {
+  const db = client();
+  const send = mock.method(db, "send", async () => ({}));
+  const user = await createDynamoAuthStore(db, "auth").createSession(
+    { id: "provider-subject", displayName: "Person" },
+    "session-hash",
+    500
+  );
+  const command = send.mock.calls[0].arguments[0] as TransactWriteCommand;
+  assert.ok(command instanceof TransactWriteCommand);
+  assert.equal(command.input.TransactItems?.length, 2);
+  assert.equal(
+    command.input.TransactItems?.[0].Put?.ConditionExpression,
+    "attribute_not_exists(id)"
+  );
+  assert.match(user.id, /^yandex:/);
+  assert.equal(
+    JSON.stringify(command.input).includes("provider-subject"),
+    false
+  );
+});
+test("existing identity keeps its profile and status, and login checks eligibility atomically", async () => {
+  const db = client();
+  let attempts = 0;
+  const send = mock.method(db, "send", async (command: unknown) => {
+    if (command instanceof GetCommand)
+      return {
+        Item: {
+          userId: "existing",
+          displayName: "Existing name",
+          status: "active",
+        },
+      };
+    if (attempts++ === 0)
+      throw Object.assign(Error("collision"), {
+        name: "TransactionCanceledException",
+      });
+    return {};
+  });
+  const user = await createDynamoAuthStore(db, "auth").createSession(
+    { id: "subject", displayName: "New name" },
+    "hash",
+    500
+  );
+  assert.equal(user.displayName, "Existing name");
+  const command = send.mock.calls.at(-1)!.arguments[0] as TransactWriteCommand;
+  assert.equal(
+    command.input.TransactItems?.[0].ConditionCheck?.ConditionExpression,
+    "#status = :active AND userId = :userId"
+  );
+});
+for (const status of ["disabled", "suspended", "unknown"]) {
+  test(`existing ${status} account cannot receive a session`, async () => {
+    const db = client();
+    let writes = 0;
+    mock.method(db, "send", async (command: unknown) => {
+      if (command instanceof GetCommand)
+        return { Item: { userId: "user", displayName: "Person", status } };
+      writes++;
+      throw Object.assign(Error("collision"), {
+        name: "TransactionCanceledException",
+      });
+    });
+    await assert.rejects(
+      createDynamoAuthStore(db, "auth").createSession(
+        { id: "subject", displayName: "Person" },
+        "hash",
+        500
+      )
+    );
+    assert.equal(writes, 1);
+  });
+}
+test("expired session and missing/revoked session return anonymous", async () => {
+  for (const Item of [undefined, { identityKey: "identity", expiresAt: 99 }]) {
+    const db = client();
+    mock.method(db, "send", async () => ({ Item }));
+    assert.equal(
+      await createDynamoAuthStore(db, "auth").readSession("hash", 100),
+      null
+    );
+  }
+});
+test("session lookup also rejects subsequently disabled users", async () => {
+  const db = client();
+  let calls = 0;
+  mock.method(db, "send", async () => ({
+    Item:
+      ++calls === 1
+        ? { identityKey: "identity", expiresAt: 500 }
+        : { userId: "user", displayName: "Person", status: "disabled" },
+  }));
+  assert.equal(
+    await createDynamoAuthStore(db, "auth").readSession("hash", 100),
+    null
+  );
+});

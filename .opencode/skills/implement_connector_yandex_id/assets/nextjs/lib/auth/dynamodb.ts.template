@@ -1,0 +1,147 @@
+import {
+  DynamoDBDocumentClient,
+  PutCommand,
+  UpdateCommand,
+  GetCommand,
+  DeleteCommand,
+  TransactWriteCommand,
+} from "@aws-sdk/lib-dynamodb";
+import { z } from "zod";
+import { hash, type AuthStore, type SafeUser } from "./core";
+
+const identitySchema = z.object({
+  userId: z.string(),
+  displayName: z.string(),
+  status: z.literal("active"),
+});
+const sessionSchema = z.object({
+  identityKey: z.string(),
+  expiresAt: z.number(),
+});
+
+// For a product without existing auth. Adapt this boundary to existing user/status policies when present.
+// One table, id (string HASH key): oauth#<state hash>, identity#yandex:<subject hash>, session#<session hash>.
+export function createDynamoAuthStore(
+  db: DynamoDBDocumentClient,
+  tableName: string
+): AuthStore {
+  const key = (id: string) => ({ TableName: tableName, Key: { id } });
+  return {
+    async createTransaction(stateHash, redirectUri, expiresAt) {
+      await db.send(
+        new PutCommand({
+          TableName: tableName,
+          Item: {
+            id: `oauth#${stateHash}`,
+            status: "pending",
+            redirectUri,
+            expiresAt,
+          },
+          ConditionExpression: "attribute_not_exists(id)",
+        })
+      );
+    },
+    async consumeTransaction(stateHash, redirectUri, now) {
+      await db.send(
+        new UpdateCommand({
+          ...key(`oauth#${stateHash}`),
+          UpdateExpression: "SET #status = :consumed",
+          ConditionExpression:
+            "#status = :pending AND expiresAt > :now AND redirectUri = :uri",
+          ExpressionAttributeNames: { "#status": "status" },
+          ExpressionAttributeValues: {
+            ":consumed": "consumed",
+            ":pending": "pending",
+            ":now": now,
+            ":uri": redirectUri,
+          },
+        })
+      );
+    },
+    async createSession(profile, sessionHash, expiresAt) {
+      // No email auto-link: each Yandex subject owns a distinct identity/user record.
+      const userId = `yandex:${hash(profile.id)}`;
+      const identityKey = `identity#${userId}`;
+      const sessionPut = {
+        TableName: tableName,
+        Item: { id: `session#${sessionHash}`, identityKey, expiresAt },
+        ConditionExpression: "attribute_not_exists(id)",
+      };
+      try {
+        await db.send(
+          new TransactWriteCommand({
+            TransactItems: [
+              {
+                Put: {
+                  TableName: tableName,
+                  Item: {
+                    id: identityKey,
+                    userId,
+                    displayName: profile.displayName,
+                    status: "active",
+                  },
+                  ConditionExpression: "attribute_not_exists(id)",
+                },
+              },
+              { Put: sessionPut },
+            ],
+          })
+        );
+        return { id: userId, displayName: profile.displayName };
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          error.name !== "TransactionCanceledException"
+        )
+          throw error;
+      }
+      const existing = await db.send(
+        new GetCommand({ ...key(identityKey), ConsistentRead: true })
+      );
+      const identity = identitySchema.parse(existing.Item);
+      // Recheck eligibility in the same transaction as session creation to avoid a suspension race.
+      await db.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              ConditionCheck: {
+                ...key(identityKey),
+                ConditionExpression: "#status = :active AND userId = :userId",
+                ExpressionAttributeNames: { "#status": "status" },
+                ExpressionAttributeValues: {
+                  ":active": "active",
+                  ":userId": identity.userId,
+                },
+              },
+            },
+            { Put: sessionPut },
+          ],
+        })
+      );
+      return { id: identity.userId, displayName: identity.displayName };
+    },
+    async readSession(sessionHash, now): Promise<SafeUser | null> {
+      const result = await db.send(
+        new GetCommand({
+          ...key(`session#${sessionHash}`),
+          ConsistentRead: true,
+        })
+      );
+      const session = sessionSchema.safeParse(result.Item);
+      if (!session.success || session.data.expiresAt <= now) return null;
+      const user = await db.send(
+        new GetCommand({
+          ...key(session.data.identityKey),
+          ConsistentRead: true,
+        })
+      );
+      const identity = identitySchema.safeParse(user.Item);
+      return identity.success
+        ? { id: identity.data.userId, displayName: identity.data.displayName }
+        : null;
+    },
+    async revokeSession(sessionHash) {
+      await db.send(new DeleteCommand(key(`session#${sessionHash}`)));
+    },
+  };
+}

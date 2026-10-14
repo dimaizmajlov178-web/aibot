@@ -1,0 +1,362 @@
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+
+export interface SafeUser {
+  id: string;
+  displayName: string;
+}
+export interface ProviderProfile {
+  id: string;
+  displayName: string;
+}
+export interface AuthStore {
+  createTransaction(
+    stateHash: string,
+    redirectUri: string,
+    expiresAt: number
+  ): Promise<void>;
+  consumeTransaction(
+    stateHash: string,
+    redirectUri: string,
+    now: number
+  ): Promise<void>;
+  createSession(
+    profile: ProviderProfile,
+    sessionHash: string,
+    expiresAt: number
+  ): Promise<SafeUser>;
+  readSession(sessionHash: string, now: number): Promise<SafeUser | null>;
+  revokeSession(sessionHash: string): Promise<void>;
+}
+export interface AuthConfig {
+  callbackPath: string;
+  clientIdEnv: string;
+  clientSecretEnv: string;
+}
+interface Dependencies {
+  env: () => Record<string, string | undefined>;
+  now: () => number;
+  fetch: typeof fetch;
+  diagnostic: (data: { connector: string; redirectUri: string }) => void;
+}
+const stateCookie = "__Host-vibecraft-oauth-state";
+const verifierCookie = "__Host-vibecraft-oauth-verifier";
+const sessionCookie = "__Host-vibecraft-session";
+const attributes = {
+  httpOnly: true,
+  secure: true,
+  sameSite: "lax",
+  path: "/",
+} as const;
+const transactionSeconds = 600;
+const sessionSeconds = 7 * 24 * 60 * 60;
+export const hash = (value: string) =>
+  createHash("sha256").update(value).digest("hex");
+const random = () => randomBytes(32).toString("base64url");
+const originError = () => new Error("public origin is not configured");
+
+function publicHost(value: string | null): string | null {
+  if (!value || value.length > 259 || /[\s,@/\\?#%]/.test(value)) return null;
+  const match = /^([a-zA-Z0-9.-]+)(?::([0-9]+))?$/.exec(value);
+  if (!match) return null;
+  const hostname = match[1].toLowerCase();
+  const labels = hostname.split(".");
+  if (
+    hostname.length > 253 ||
+    labels.length < 2 ||
+    !/[a-z]/.test(labels.at(-1)!)
+  )
+    return null;
+  if (
+    labels.some(
+      (label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)
+    )
+  )
+    return null;
+  if (
+    [
+      "localhost",
+      "local",
+      "internal",
+      "test",
+      "invalid",
+      "lan",
+      "home",
+      "localdomain",
+      "corp",
+      "intranet",
+      "private",
+    ].includes(labels.at(-1)!)
+  )
+    return null;
+  if (match[2] && (+match[2] < 1 || +match[2] > 65535)) return null;
+  try {
+    return new URL(`https://${value}`).host;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveRuntimeOrigin(request: NextRequest): string {
+  // VibeCraft/Yandex Cloud ingress overwrites routing headers. Do not use outside this trust boundary.
+  const forwarded = request.headers.get("x-forwarded-host");
+  if (forwarded !== null) {
+    const host = publicHost(forwarded);
+    if (!host) throw originError();
+    return `https://${host}`;
+  }
+  let url: URL | undefined;
+  try {
+    const parsed = new URL(request.url);
+    if (!parsed.username && !parsed.password) url = parsed;
+  } catch {
+    /* Fail closed below. */
+  }
+  const host = publicHost(request.headers.get("host"));
+  if (url && host && host !== url.host.toLowerCase()) return `https://${host}`;
+  if (url?.protocol === "https:") return url.origin;
+  throw originError();
+}
+
+class ConfigurationError extends Error {}
+
+function validateConfig(config: AuthConfig) {
+  if (
+    typeof config.callbackPath !== "string" ||
+    !/^\/(?!\/)/.test(config.callbackPath) ||
+    /[?#\\\s]/.test(config.callbackPath) ||
+    new URL(config.callbackPath, "https://validation.example.com").origin !==
+      "https://validation.example.com"
+  )
+    throw new Error("invalid callback path");
+  for (const role of ["clientIdEnv", "clientSecretEnv"] as const) {
+    if (
+      typeof config[role] !== "string" ||
+      !/^[A-Za-z_][A-Za-z0-9_]*$/.test(config[role]) ||
+      config[role].startsWith("NEXT_PUBLIC_")
+    )
+      throw new Error(`invalid ${role}`);
+  }
+  if (config.clientIdEnv === config.clientSecretEnv)
+    throw new Error("invalid environment variable mappings");
+}
+function equal(left: string, right: string) {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+function noCache(response: NextResponse) {
+  response.headers.set("Cache-Control", "no-store");
+  response.headers.set("Referrer-Policy", "no-referrer");
+  return response;
+}
+function clearTransient(response: NextResponse) {
+  response.cookies.set(stateCookie, "", { ...attributes, maxAge: 0 });
+  response.cookies.set(verifierCookie, "", { ...attributes, maxAge: 0 });
+  return response;
+}
+const tokenSchema = z.object({ access_token: z.string().min(1) });
+const profileSchema = z.object({
+  id: z.string().min(1).max(256),
+  display_name: z.string().max(256).optional(),
+});
+
+export function createAuthHandlers(
+  config: AuthConfig,
+  store: AuthStore,
+  overrides: Partial<Dependencies> = {}
+) {
+  validateConfig(config);
+  const deps: Dependencies = {
+    env: () => process.env,
+    now: () => Math.floor(Date.now() / 1000),
+    fetch: (...args) => fetch(...args),
+    diagnostic: (data) => console.info(JSON.stringify(data)),
+    ...overrides,
+  };
+  function credentials() {
+    const env = deps.env();
+    for (const name of [config.clientIdEnv, config.clientSecretEnv])
+      if (!env[name]?.trim())
+        throw new ConfigurationError(`missing environment variable: ${name}`);
+    return {
+      client_id: env[config.clientIdEnv]!,
+      client_secret: env[config.clientSecretEnv]!,
+    };
+  }
+  return {
+    async start(request: NextRequest) {
+      try {
+        const origin = resolveRuntimeOrigin(request);
+        const redirectUri = new URL(config.callbackPath, origin).href;
+        const { client_id } = credentials();
+        const state = random();
+        const verifier = random();
+        const challenge = createHash("sha256")
+          .update(verifier)
+          .digest("base64url");
+        await store.createTransaction(
+          hash(state),
+          redirectUri,
+          deps.now() + transactionSeconds
+        );
+        const destination = new URL("https://oauth.yandex.ru/authorize");
+        destination.search = new URLSearchParams({
+          response_type: "code",
+          client_id,
+          redirect_uri: redirectUri,
+          state,
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+        }).toString();
+        const response = noCache(NextResponse.redirect(destination, 302));
+        response.cookies.set(stateCookie, state, {
+          ...attributes,
+          maxAge: transactionSeconds,
+        });
+        response.cookies.set(verifierCookie, verifier, {
+          ...attributes,
+          maxAge: transactionSeconds,
+        });
+        deps.diagnostic({ connector: "yandex-id", redirectUri });
+        return response;
+      } catch (error) {
+        return noCache(
+          NextResponse.json(
+            {
+              error:
+                error instanceof ConfigurationError
+                  ? error.message
+                  : "Authentication is unavailable",
+            },
+            { status: 503 }
+          )
+        );
+      }
+    },
+    async callback(request: NextRequest) {
+      let origin: string | undefined;
+      try {
+        const params = request.nextUrl.searchParams;
+        const state = params.getAll("state");
+        const cookie = request.cookies.get(stateCookie)?.value;
+        if (state.length !== 1 || !cookie || !equal(state[0], cookie))
+          throw new Error("invalid state");
+        origin = resolveRuntimeOrigin(request);
+        await store.consumeTransaction(
+          hash(cookie),
+          new URL(config.callbackPath, origin).href,
+          deps.now()
+        );
+        const code = params.getAll("code");
+        const error = params.getAll("error");
+        if (code.length !== 1 || !code[0] || error.length !== 0)
+          throw new Error("provider denied or malformed callback");
+        const verifier = request.cookies.get(verifierCookie)?.value;
+        if (!verifier || !/^[A-Za-z0-9_-]{43,128}$/.test(verifier))
+          throw new Error("missing verifier");
+        const tokenResponse = await deps.fetch(
+          "https://oauth.yandex.ru/token",
+          {
+            method: "POST",
+            redirect: "error",
+            signal: AbortSignal.timeout(10_000),
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              grant_type: "authorization_code",
+              code: code[0],
+              ...credentials(),
+              code_verifier: verifier,
+            }),
+          }
+        );
+        if (!tokenResponse.ok) throw new Error("token failed");
+        const token = tokenSchema.parse(await tokenResponse.json());
+        const profileResponse = await deps.fetch(
+          "https://login.yandex.ru/info",
+          {
+            headers: { Authorization: `OAuth ${token.access_token}` },
+            redirect: "error",
+            signal: AbortSignal.timeout(10_000),
+          }
+        );
+        if (!profileResponse.ok) throw new Error("profile failed");
+        const profile = profileSchema.parse(await profileResponse.json());
+        const session = random();
+        await store.createSession(
+          {
+            id: profile.id,
+            displayName: profile.display_name || "Yandex user",
+          },
+          hash(session),
+          deps.now() + sessionSeconds
+        );
+        const response = clearTransient(
+          noCache(NextResponse.redirect(new URL("/", origin), 302))
+        );
+        response.cookies.set(sessionCookie, session, {
+          ...attributes,
+          maxAge: sessionSeconds,
+        });
+        return response;
+      } catch {
+        // Never reflect provider values or render the callback through the application bridge.
+        const response = origin
+          ? NextResponse.redirect(new URL("/?auth_error=1", origin), 302)
+          : NextResponse.json(
+              { error: "Authentication failed" },
+              { status: 400 }
+            );
+        return clearTransient(noCache(response));
+      }
+    },
+    async session(request: NextRequest) {
+      try {
+        const session = request.cookies.get(sessionCookie)?.value;
+        const user = session
+          ? await store.readSession(hash(session), deps.now())
+          : null;
+        return noCache(
+          NextResponse.json({
+            user: user ? { id: user.id, displayName: user.displayName } : null,
+          })
+        );
+      } catch {
+        return noCache(
+          NextResponse.json(
+            { error: "Session is unavailable" },
+            { status: 503 }
+          )
+        );
+      }
+    },
+    async logout(request: NextRequest) {
+      try {
+        const origin = resolveRuntimeOrigin(request);
+        if (
+          request.method !== "POST" ||
+          request.headers.get("origin") !== origin
+        )
+          return noCache(
+            NextResponse.json({ error: "Invalid origin" }, { status: 403 })
+          );
+      } catch {
+        return noCache(
+          NextResponse.json({ error: "Invalid origin" }, { status: 403 })
+        );
+      }
+      try {
+        const session = request.cookies.get(sessionCookie)?.value;
+        if (session) await store.revokeSession(hash(session));
+        const response = noCache(NextResponse.json({ ok: true }));
+        response.cookies.set(sessionCookie, "", { ...attributes, maxAge: 0 });
+        return response;
+      } catch {
+        return noCache(
+          NextResponse.json({ error: "Logout is unavailable" }, { status: 503 })
+        );
+      }
+    },
+  };
+}

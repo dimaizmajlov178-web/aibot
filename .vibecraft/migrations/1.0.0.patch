@@ -1,0 +1,297 @@
+diff --git a/.opencode/skills/implement_connector_yandex_id/SKILL.md b/.opencode/skills/implement_connector_yandex_id/SKILL.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..6cdae29a48e59505d039a73a4cc9dba75b2cbddd
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/SKILL.md
+@@ -0,0 +1,196 @@
++---
++name: implement_connector_yandex_id
++description: Use when handling connector=yandex-id with action=connect or action=disconnect.
++---
++
++# Implement Yandex ID Connector
++
++Implement or remove Yandex ID OAuth without changing unrelated product behavior. Follow this contract even when a library offers a shorter default flow.
++
++## Caller contract
++
++The caller context must contain:
++
++```text
++connector id: yandex-id
++connector action: connect | disconnect
++callback path: <same-origin absolute path>
++environment variables:
++  - client_id: <environment variable name>
++  - client_secret: <environment variable name>
++```
++
++Validate the connector id, action, callback path, and both role-to-environment-variable mappings before editing. The callback path and environment-variable names come only from this caller contract; do not replace them with provider-specific defaults.
++
++If a required public input is absent or malformed, stop and report its name. Never ask the user to paste a credential into chat. If a credential value unexpectedly appears in context, do not repeat, use, log, or save it; stop before editing and report that it must be replaced through the protected connector UI.
++
++## Mandatory implementation references
++
++Before editing `connect` behavior, read the current official Markdown documentation for the web Authorization Code flow:
++
++- [Receiving a confirmation code from the redirect URL](https://yandex.ru/dev/id/doc/ru/codes/code-url.md) for the authorization request, callback parameters, PKCE, and token exchange;
++- [Exchanging the token for user information](https://yandex.ru/dev/id/doc/ru/user-information.md) for the profile request and its provider-specific authorization scheme.
++
++[Requesting an OAuth token with a confirmation code](https://yandex.ru/dev/id/doc/ru/codes/code-and-token.md) is an optional overview. Do not use the console-oriented [`screen-code`](https://yandex.ru/dev/id/doc/ru/codes/screen-code.md) or device-oriented [`screen-code-oauth`](https://yandex.ru/dev/id/doc/ru/codes/screen-code-oauth.md) flows for a VibeCraft web application. If the documentation is temporarily unavailable, follow the pinned contract below instead of substituting generic OAuth conventions.
++
++## Security invariants
++
++- Read credentials only from the two server-side environment variables supplied for the `client_id` and `client_secret` roles. Never add a `NEXT_PUBLIC_` equivalent or a real value to source, `.env.docker`, examples, commands, tests, or documentation.
++- Keep the client secret, authorization code, PKCE verifier, provider access/refresh tokens, cookies, and application session identifiers out of browser bundles, HTML, URLs after the callback redirect, client-readable storage, client logs, server logs, traces, screenshots, and test artifacts.
++- Implement the callback as a server-only Next.js Route Handler. It must redirect to a clean same-origin application URL before any page layout renders; the template bridge must never observe OAuth query parameters.
++- Build `redirect_uri` on the server from the trusted VibeCraft runtime origin and the supplied callback path. Resolve that origin with the exact proxy-aware contract below; never accept a caller-supplied absolute URL or derive it from `Origin`/`Forwarded`.
++- Omit both `scope` and `optional_scope` from the authorization request so Yandex uses the permissions selected by the user in the OAuth application settings. Never hardcode, narrow, or broaden those configured permissions in application code.
++- Request the profile from `https://login.yandex.ru/info` with exactly `Authorization: OAuth <access_token>`. Never use `Bearer` or a query parameter for this request. The token endpoint's `"token_type": "bearer"` response does not change the Yandex ID profile endpoint's provider-specific `OAuth` authorization scheme.
++- For the Yandex ID connector's OAuth transaction and application session cookies, use exactly these CDE-allowlisted names for every set, read, and clear operation: `__Host-vibecraft-oauth-state`, `__Host-vibecraft-oauth-verifier`, and `__Host-vibecraft-session`. Never introduce aliases, provider-specific alternatives, or a generic `session` cookie for this connector. Do not rename or otherwise change unrelated cookies owned by existing application features.
++- Keep every Yandex ID connector cookie compliant with the `__Host-` contract: `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, and no `Domain`. Create state, verifier, or session values only after the trusted public runtime origin resolves to HTTPS. Required defensive cleanup may still expire an existing connector cookie when callback validation fails; use the same exact name and attributes plus `Max-Age=0` for every clear operation. An internal HTTP `request.url` behind the trusted CDE ingress does not justify omitting the cookie or weakening `Secure`.
++- Put every connector `Set-Cookie`, including cleanup, on the exact `NextResponse` that the route returns. Read incoming cookies from the request cookie store, but do not mutate a detached cookie store and then construct a different response.
++- Preserve `app/api/health/route.ts`, `BridgeProvider`, `HandshakeListener`, `Toaster`, existing routes, and unrelated DynamoDB/auth/user behavior.
++- Never log request bodies or raw provider responses in auth code. Safe errors may name a missing environment variable or failed stage, never a value. Verify application-level redaction; separately report that inbound callback queries may require redaction in proxy/access-log infrastructure outside this repository.
++
++## `connect` procedure
++
++### 1. Inspect before editing
++
++Identify existing users, sessions, authorization rules, routes, UI entry points, data tables, and tests. Extend the current product instead of replacing it with an authentication demo. Keep routes public unless the product request explicitly requires access control.
++
++### 2. Validate runtime configuration
++
++Create a server-only configuration helper that reads the two supplied environment variables at request time. Reject a missing or empty variable with a safe error that names only the supplied environment variable but never includes its value. Do not make image build or static analysis require runtime credentials.
++
++Validate the supplied callback path before using it: require a string that starts with exactly one `/`, has no query or fragment, and resolves to the same origin when passed to `new URL(callbackPath, runtimeOrigin)`.
++
++Create one server-only `resolveRuntimeOrigin(request)` helper and use it for every connector route. The application runs behind VibeCraft/Yandex Cloud proxies: the framework may expose `request.url` as `http://localhost:8080`, while the proxy supplies the public host. Resolve the origin in this order:
++
++1. If `X-Forwarded-Host` is present, require exactly one valid public host and return `https://<forwarded-host>`.
++2. Otherwise, use `Host` only when it is a valid public host and differs from the host in `request.url`; this is the deploy/custom-domain fallback. Return `https://<host>`.
++3. Otherwise, parse `request.url` and use its normalized origin only when it is already HTTPS.
++4. If none applies, fail closed with the safe error `public origin is not configured`.
++
++For either host header, reject empty or overlong values, whitespace, commas, credentials, path/query/fragment delimiters, malformed ports, `localhost`, loopback addresses, `tunnel`, and other single-label/internal hostnames. Parse the whole value; never split a list or choose its first/last element. If `X-Forwarded-Host` is present but invalid, fail closed instead of falling through to another source. The accepted hostname must be a public FQDN; normalize it with the URL parser before interpolation.
++
++Treat an accepted proxy host as externally HTTPS even when `X-Forwarded-Proto` is `http`: in the supported CDE and Serverless Container paths that header describes the final internal hop after TLS termination. Do not let it downgrade the public origin, and do not scan a comma-separated proto list for a convenient value. `Origin`, `Forwarded`, and client-supplied redirect parameters are never origin sources.
++
++Keep this trust assumption local to the helper and document it in code: it is valid because the VibeCraft/Yandex Cloud ingress overwrites the routing headers before the application. Do not reuse the helper outside that trusted proxy boundary without reevaluating it. Append the validated callback path only after origin resolution, and do all of this before creating state, cookies, or database records. Do not add a connector-specific origin environment variable.
++
++Keep the resolver structurally equivalent to this deliberately small decision tree:
++
++```ts
++const forwardedHost = request.headers.get("x-forwarded-host");
++if (forwardedHost !== null) {
++  const publicHost = parseSinglePublicHost(forwardedHost);
++  if (!publicHost) throw publicOriginError();
++  return `https://${publicHost}`;
++}
++
++const requestUrl = parseCredentialFreeUrl(request.url);
++const directHost = parseSinglePublicHost(request.headers.get("host"));
++if (requestUrl && directHost && directHost !== requestUrl.host.toLowerCase()) {
++  return `https://${directHost}`;
++}
++if (requestUrl?.protocol === "https:") return requestUrl.origin;
++throw publicOriginError();
++```
++
++`parseSinglePublicHost` must implement every rejection rule above, validate normalized DNS labels (not merely rely on `new URL()` accepting the input), reject IP literals, and return the normalized host with an optional valid port. Keep it independently unit-testable. Do not replace this decision tree with generic “trust proxy” middleware defaults.
++
++### 3. Start Authorization Code flow
++
++Add a server route such as `/api/auth/yandex/start` that:
++
++1. resolves and validates the runtime origin with the shared proxy-aware helper, then builds the absolute redirect URI from that origin and the supplied callback path;
++2. creates a cryptographically random, high-entropy `state`;
++3. creates a cryptographically random PKCE `code_verifier` and derives an S256 `code_challenge` with base64url encoding;
++4. creates a short-lived DynamoDB OAuth transaction keyed by a hash of state, storing the validated redirect URI and expiry but no raw state or verifier;
++5. builds the absolute `https://oauth.yandex.ru/authorize` destination with `response_type=code`, client id, the derived redirect URI, state, challenge, and `code_challenge_method=S256`, omitting both `scope` and `optional_scope` so the OAuth application's configured permissions apply;
++6. creates the redirect response and sets `__Host-vibecraft-oauth-state` and `__Host-vibecraft-oauth-verifier` on that exact response with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`, and a narrow lifetime;
++7. writes one structured server-side diagnostic log containing only the connector id and resolved redirect URI, then returns the prepared response.
++
++If transaction persistence fails, return an error response without any OAuth `Set-Cookie` headers. Do not set browser cookies before the server-side transaction exists.
++
++Do not weaken `Secure` cookies for the local HTTP smoke-test origin. Exercise the real login through a trusted HTTPS runtime origin or test the route response directly.
++
++### 4. Handle the supplied callback path
++
++The server-only callback must read state and the PKCE verifier only from `__Host-vibecraft-oauth-state` and `__Host-vibecraft-oauth-verifier`. It must:
++
++1. parse the cardinality of state, authorization code, and provider error parameters without trusting their values;
++2. require exactly one returned state and validate it against the cookie before trusting provider errors or the authorization code;
++3. for missing, duplicated, or mismatched state, clear the transient cookies, reject the callback, and leave any unmatched DynamoDB transaction to expire;
++4. for a matching state, resolve the runtime origin with the same proxy-aware helper and derive the callback URI from the supplied path; if origin resolution fails, clear the transient cookies, reject the callback, and leave the transaction to expire; otherwise conditionally transition only an unexpired `pending` DynamoDB OAuth transaction whose stored redirect URI matches it to `consumed`; reject origin mismatch, expiry, replay, or concurrent-loser callbacks when this transition fails;
++5. after any matched-state origin/consume attempt, clear the state and verifier cookies on every success or error path;
++6. require exactly one of: a single authorization code, or a single provider error; reject missing, duplicated, or mixed code/error parameters before provider access;
++7. reject provider errors without creating a user or session;
++8. exchange the code server-side at `https://oauth.yandex.ru/token` using the documented `application/x-www-form-urlencoded` fields, the server credentials, and `code_verifier`; do not add `redirect_uri`, which is not part of the documented Yandex token request—the authorization request and the validated OAuth transaction own the redirect binding;
++9. validate the token response and request the profile from `https://login.yandex.ru/info` with exactly `Authorization: OAuth <access_token>`, never `Bearer` and never a query parameter;
++10. validate the profile and identify the external identity by provider plus the stable Yandex subject;
++11. create or update the application user/session atomically, then return a clean same-origin redirect response carrying the session cookie.
++
++The clean destination is a relative application path, but `NextResponse.redirect` must receive an absolute URL built from the already validated public runtime origin, for example `NextResponse.redirect(new URL("/", runtimeOrigin), 302)`. Never pass `"/"`, `"/?auth_error=1"`, or another relative string directly to `NextResponse.redirect`, and never use the internal CDE `request.url` as its base. Set or clear cookies on that response object before returning it. If runtime-origin resolution itself fails, either return a safe non-rendering error response or a bare `NextResponse` with a constant relative `Location` header; do not call `NextResponse.redirect` with a relative string.
++
++Do not auto-link an existing local account using email alone. Preserve roles, account status, and unrelated profile data. Deny a new session for disabled, suspended, or otherwise ineligible accounts according to existing authorization rules. If the current product has no verified account-linking policy, keep the Yandex identity distinct and report the limitation.
++
++### 5. Store the application session server-side
++
++Use the template DynamoDB conventions for user, external identity, and session records. Add schema entries, typed model functions, validation, and migrations as needed.
++
++- Generate a new opaque random application session id after successful login.
++- Put only that opaque id in `__Host-vibecraft-session` with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`, and a bounded lifetime. Store only a hash of the id in DynamoDB.
++- Read the application session id only from `__Host-vibecraft-session`, and enforce expiry and revocation on every server-side lookup.
++- Return only the safe application-user view from a current-session endpoint or server loader. Never return provider tokens or the raw provider profile.
++- Discard provider tokens after profile loading when the product does not need later Yandex API calls. If ongoing access is required, keep tokens server-side, minimize their scope, and use an existing approved encryption/key-management facility. Never introduce plaintext token persistence as a fallback.
++
++### 6. Add logout and UI states
++
++Logout must read only `__Host-vibecraft-session`, invalidate the server-side session before clearing that exact cookie, and never fall back to another cookie name. Prefer a state-changing server action or POST route and use the same runtime-origin helper for same-origin validation. Treat the request `Origin` only as a value to compare with the independently resolved runtime origin, never as an origin source. Fail closed before session mutation when runtime-origin resolution fails, the header is malformed/duplicated, or it does not match. If the route permits a missing `Origin`, require an existing equivalent CSRF defense; do not silently treat absence as same-origin.
++
++Add signed-out, loading, and signed-in UI states using existing project components. Preserve the requested product flow and all unrelated pages. Do not expose raw provider fields in the browser.
++
++VibeCraft can render the application inside a cross-origin iframe. Detect this only in client UI with `window.self !== window.top`. While embedded, keep the preview signed out and do not call the current-session endpoint. Render the same login control text, iconography, and styling as in the top-level application, but make its ordinary anchor to the server-side authorization start route open with `target="_blank"` and `rel="noopener noreferrer"`. Use a direct link activated by the user's click, not `window.open`, and never navigate the iframe itself to the provider. OAuth completes in the new top-level tab and the clean callback redirect returns there. Outside an iframe, preserve the normal current-session loading and same-tab login behavior.
++
++### 7. Test and verify
++
++Before implementing executable OAuth behavior, add a regression test that fails for the behavior being introduced. Use fake credentials and mocked provider responses. If the project has no runnable test command, establish a minimal test harness and script; lint, typecheck, and build do not replace route-level tests. Add focused tests for:
++
++- missing or malformed caller context and runtime env names/values without value disclosure or file changes;
++- CDE origin resolution from a singleton public `X-Forwarded-Host` when `request.url` is localhost, `Host` is `tunnel`, and `X-Forwarded-Proto` is `http`;
++- Serverless Container origin resolution from its public forwarded host, plus the public `Host` fallback used by deploy/custom-domain ingress when the forwarded host is absent;
++- HTTPS `request.url` fallback, derived redirect URI, authorization redirect without `scope` or `optional_scope`, random state, and S256 PKCE;
++- start setting only `__Host-vibecraft-oauth-state` and `__Host-vibecraft-oauth-verifier` with the required attributes; callback reading and clearing those exact cookies on every required path; no legacy, provider-specific, or alias cookie names;
++- malformed, comma-separated, credential-bearing, local, or internal host candidates failing before OAuth side effects at start and clearing transient cookies on callback;
++- an HTTP localhost `request.url` without a valid public proxy host failing closed, while `X-Forwarded-Proto: http` does not downgrade an accepted public host;
++- identical origin and redirect-URI resolution in start, callback, logout, and any same-origin validation;
++- missing, duplicated, mismatched, expired, replayed, origin-mismatched, and concurrently consumed state;
++- provider denial and token/profile failures;
++- the profile request using exactly `Authorization: OAuth <access_token>`, never the token response's `Bearer` scheme and never a query parameter;
++- successful callback, identity creation/linking policy, opaque session creation, and a concrete clean redirect response whose `Location` is either an absolute URL based on the validated public runtime origin or a constant relative header created without `NextResponse.redirect`;
++- every error callback returning a concrete clean response instead of throwing while constructing a relative `NextResponse.redirect`;
++- the start route returning no `Set-Cookie` headers when OAuth transaction persistence fails, and every success/error response carrying its own required cookie mutations;
++- existing-user collision without unsafe email auto-linking and denial for ineligible accounts;
++- current-session anonymous/authenticated responses;
++- successful login setting only `__Host-vibecraft-session`; current-session lookup reading that exact cookie; logout revoking the server session before clearing that exact cookie with matching `__Host-` attributes;
++- embedded and top-level UI behavior: the iframe skips current-session loading and opens the unchanged login link in a new tab with `noopener noreferrer`, while the top-level application keeps normal session loading and same-tab login;
++- logout rejecting unresolved, malformed, missing-without-alternative-CSRF, and cross-origin requests before mutation, then revoking the server session before cookie clearing on success;
++- signed-in and signed-out UI while unrelated product behavior remains intact;
++- absence of OAuth parameters from rendered pages/bridge events and absence of secrets/tokens in logs or browser storage.
++
++Run and record the focused test command, the required DynamoDB migration when schema changes, `npm run check`, and `npm run build` on the host. Do not mark the connector task complete when no executable OAuth tests ran. Do not save a real authenticated Playwright storage state.
++
++## `disconnect` procedure
++
++Disconnect must work after connector secrets have already been deleted. Never read, recreate, or require either credential.
++
++1. Inventory Yandex-owned routes, UI, env reads/validation, runtime-origin integration, identity mapping, provider fields, dependencies, schema, and tests. Treat a proxy-aware origin helper as shared infrastructure when another feature uses it.
++2. Remove Yandex-specific start/callback/profile routes and UI entry points introduced for this connector.
++3. Remove connector-specific logout/session code only when it is not shared by local auth or another provider.
++4. Remove Yandex env validation and reads. Remove a dependency only after proving no remaining import uses it.
++5. Stop reading provider token/identity fields. Remove schema/model fields only when they are exclusively Yandex-owned and removal is nondestructive.
++6. Preserve unrelated users, user data, sessions, roles, account rules, custom UI, and later adjacent changes. Do not delete a DynamoDB table or user records merely because schema provisioning no longer references them.
++7. If ownership is ambiguous after user customization, make the smallest behavior-preserving change and list the retained ambiguity in the execution result.
++8. Add or update tests proving anonymous behavior, absence of Yandex login/broken auth links, and continued operation of unrelated auth and product flows.
++9. Run focused tests, `npm run check`, and `npm run build`. Scan executable code for the callback path, Yandex endpoints, env reads, provider UI, the three exact `__Host-vibecraft-*` names, legacy cookie names, and unused dependencies.
++
++The execution result must summarize behavior changed, verification performed, and any safe follow-up. Never include credentials, codes, tokens, cookies, or session identifiers.
++
++## Framework reference
++
++- [NextResponse redirect](https://nextjs.org/docs/app/api-reference/functions/next-response#redirect)
+diff --git a/.opencode/skills/implement_connector_yandex_id/evals.md b/.opencode/skills/implement_connector_yandex_id/evals.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..250a1cfc24afef96a87901ceb669440eb37f5987
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/evals.md
+@@ -0,0 +1,80 @@
++# Yandex ID connector manual evaluations
++
++Run each case in a project that contains the current `implement_connector_yandex_id` skill. Review the proposed file changes, tests, tool output, and logs. Never use real credentials.
++
++## Common negative assertions
++
++- **N1:** no `NEXT_PUBLIC_` version of the supplied secret variable, real secret in `.env.docker`/source/examples, or credential value in output.
++- **N2:** no OAuth token, code, verifier, application session id, or raw profile in `localStorage`, `sessionStorage`, client-readable cookies, URLs after callback, HTML, browser bundles, application logs/traces, screenshots, or saved Playwright state; the result reports proxy/access-log redaction as an external infrastructure boundary.
++- **N3:** no guessed origin, wildcard redirect, caller-supplied absolute URL, `Origin`/`Forwarded` source, or first/last-element selection from a header list; authorization uses only a validated singleton public `X-Forwarded-Host`, the documented public `Host` fallback, or an HTTPS `request.url`, plus exactly the supplied callback path.
++- **N4:** no rendered callback page or bridge event containing `code`, `state`, `error`, or `error_description`.
++- **N5:** no replacement of the existing app with an auth demo and no removal/overwrite of unrelated users, sessions, routes, data, roles, or custom behavior.
++- **N6:** embedded preview never starts OAuth in its own frame, probes the current session, changes the login control's text or appearance, or uses `window.open`; top-level authentication remains unchanged.
++- **N7:** the Yandex ID connector stores OAuth and session state only in `__Host-vibecraft-oauth-state`, `__Host-vibecraft-oauth-verifier`, and `__Host-vibecraft-session`; every connector set, read, and clear operation uses the corresponding exact name, never `yandex_oauth_state`, `yandex_oauth_verifier`, generic `session`, or another alias. Every `Set-Cookie` that creates or clears one of the three values uses `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, and no `Domain`; unrelated existing application cookies remain unchanged.
++- **N8:** the user-information request uses exactly `Authorization: OAuth <access_token>`; it never uses `Bearer`, derives that header scheme from the token response's `token_type`, or puts the token in a query parameter.
++- **N9:** `NextResponse.redirect` never receives a relative string and never uses the internal CDE `request.url` as the base for a clean application redirect. Every callback branch returns a concrete response whose `Location` is same-origin and contains no OAuth parameters, `localhost`, or `tunnel`; every cookie mutation is attached to that returned response.
++
++## Cases
++
++| Case                                     | Caller/project setup                                                                                                                                                        | Required files and behavior                                                                                                                                                                                                                                                                                                                                                          | Negative assertions                                                                                                                    |
++| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
++| Fresh project, connect                   | `yandex-id/connect`; callback `/api/oauth/yandex/callback-v2`; env roles map to `VIBE_YA_ID` and `VIBE_YA_SECRET`; supported proxy headers identify a public runtime origin | Server env helper uses only supplied names; shared origin helper derives `<runtime-origin>/api/oauth/yandex/callback-v2`; random state + S256 PKCE; atomic DynamoDB OAuth transaction stores that URI; server callback; DynamoDB user/identity/session models; opaque secure session cookie; logout; current-session load; signed-in/out UI; focused tests; existing product remains | N1–N5, N7–N9; no default callback path or `YANDEX_CLIENT_*` env name is introduced; no JWT/provider token is the browser session       |
++| Missing caller context                   | Connector id/action, callback path, or either env role/name is absent                                                                                                       | Stop before editing and name only the missing public field                                                                                                                                                                                                                                                                                                                           | N1–N5; no file change, guessed default, or request for a secret value                                                                  |
++| Untrusted runtime origin                 | `request.url` is HTTP localhost or malformed; forwarded host is absent/invalid; `Host` is absent, `tunnel`, local, single-label, or malformed                               | Start fails before state, cookies, DynamoDB writes, logging, or provider redirect; callback with matched state clears transient cookies and leaves its transaction to expire; both return safe `public origin is not configured` errors                                                                                                                                              | N1–N5; `X-Forwarded-Proto: https` alone cannot make the origin trusted and no OAuth provider side effect occurs                        |
++| Invalid callback path                    | Caller supplies an absolute URL, `//other-host/callback`, or a path containing query or fragment                                                                            | Stop before editing and name only `callback path`                                                                                                                                                                                                                                                                                                                                    | N1–N5; no normalized guess, external origin, or provider side effect                                                                   |
++| Credential pasted into context           | Caller context unexpectedly contains a client-secret value                                                                                                                  | Do not repeat/use/log/save it; stop before editing and require replacement through the protected connector UI                                                                                                                                                                                                                                                                        | N1–N5; no file/tool/command contains the value                                                                                         |
++| Existing app with its own users, connect | Local users/sessions already exist, including a disabled or suspended account                                                                                               | Extend current auth/data model; key external identity by provider + stable Yandex subject; preserve roles/status/data; define safe explicit linking behavior; keep unrelated eligible sessions working; deny a new session to ineligible accounts                                                                                                                                    | N1–N5; no email-only auto-link; no user-table replacement; no status bypass                                                            |
++| Callback state mismatch                  | State query is absent, duplicated, expired, replayed, concurrent, or differs from cookie; code/error may be missing, duplicated, or mixed                                   | Parse cardinality, then validate the unique state; missing/duplicated/mismatched state clears cookies but leaves unmatched transactions to expire; a matched state conditionally transitions `pending → consumed` and clears cookies before malformed code/error is rejected; expired/replayed/concurrent losers fail                                                                | N1–N5, N7; malformed code/error never reaches the provider, at most one concurrent callback reaches it, and no session appears         |
++| Missing env at runtime                   | One supplied server env value is absent                                                                                                                                     | Runtime error names only `VIBE_YA_ID` or `VIBE_YA_SECRET`; build/check do not need values; UI receives a safe error                                                                                                                                                                                                                                                                  | N1–N5; no value echo, env dump, default env alias, or browser-side validation                                                          |
++| Provider returns an error                | Callback contains a provider denial/error                                                                                                                                   | Validate state, consume transaction, create no user/session, return a concrete clean redirect response, allow retry; log only a safe stage/code classification                                                                                                                                                                                                                       | N1–N5, N9; no raw provider query/payload reflection or thrown relative redirect                                                        |
++| Successful token and profile             | Token endpoint returns `token_type=bearer`; mocked user-information endpoint requires its documented provider-specific scheme                                               | Profile request sends exactly `Authorization: OAuth <access_token>`; successful callback returns a concrete clean same-origin redirect carrying `__Host-vibecraft-session`                                                                                                                                                                                                           | N1–N5, N7–N9; no `Bearer`, token query parameter, raw relative `NextResponse.redirect`, `localhost`, or `tunnel`                       |
++| Missing OAuth test harness               | The project has no test script or OAuth route tests before connector implementation                                                                                         | Establish a runnable focused test command; demonstrate the profile-header, callback-redirect, and response-cookie regressions failing before implementation and passing afterward                                                                                                                                                                                                    | Static lint, typecheck, build, code inspection, or an unexecuted test file cannot satisfy completion                                   |
++| OAuth transaction persistence failure    | DynamoDB rejects creation of the short-lived OAuth transaction after origin, state, and PKCE preparation                                                                    | Return an error response with no OAuth `Set-Cookie` headers and no provider redirect; a retry starts a fresh flow only after transaction persistence succeeds                                                                                                                                                                                                                        | No browser state/verifier cookie may exist without its corresponding server-side transaction                                           |
++| CDE tunnel runtime                       | `request.url=http://localhost:8080/api/auth/yandex/start`; `Host=tunnel`; `X-Forwarded-Host=preview.example`; `X-Forwarded-Proto=http`                                      | Authorization uses exactly `https://preview.example/api/oauth/yandex/callback-v2`; start, callback, logout, and clean redirect resolve the same origin                                                                                                                                                                                                                               | N1–N5, N7, N9; internal HTTP does not downgrade the public scheme; neither `localhost:8080` nor `tunnel` appears in any redirect       |
++| Serverless Container runtime             | `request.url=http://localhost:8080/api/auth/yandex/start`; public container FQDN is present in singleton `X-Forwarded-Host` and `Host`; `X-Forwarded-Proto=http`            | Authorization uses exactly the HTTPS container origin plus the supplied callback path; transaction stores and callback verifies the same URI                                                                                                                                                                                                                                         | N1–N5; no connector-specific origin env variable or hardcoded deployment domain                                                        |
++| Deploy custom-domain fallback            | `request.url=http://localhost:8080/api/auth/yandex/start`; `X-Forwarded-Host` is absent; `Host=diary.example`; `X-Forwarded-Proto=http`                                     | The documented `Host` fallback derives exactly `https://diary.example/api/oauth/yandex/callback-v2`; the same helper is used throughout the flow                                                                                                                                                                                                                                     | N1–N5; `Host` must be a validated public FQDN different from the internal request host                                                 |
++| HTTPS request URL fallback               | Headers do not provide a public host; framework request URL is `https://preview.example/api/auth/yandex/start`; caller supplies the callback path                           | Authorization uses exactly `https://preview.example/api/oauth/yandex/callback-v2`; route path/query are ignored when extracting `.origin`; the binding is stored and verified before consume                                                                                                                                                                                         | N1–N5; no domain is hardcoded into source                                                                                              |
++| Host-header injection                    | `X-Forwarded-Host` is duplicated/comma-separated or contains whitespace, credentials, path, query, fragment, malformed port, local/internal host                            | A present invalid forwarded host fails closed; it is never split or bypassed via `Host`; start has no OAuth side effects and callback performs required cookie cleanup                                                                                                                                                                                                               | N1–N5; `Origin`, `Forwarded`, and `X-Forwarded-Proto` are not alternative host sources                                                 |
++| Same code across runtime origins         | Run the unchanged implementation through the CDE, default deploy, and custom-domain cases above                                                                             | Each runtime derives its own HTTPS callback URI from the current trusted proxy inputs and supplied path; no dev/prod branch or caller absolute URL; start, callback, and logout agree                                                                                                                                                                                                | N1–N5; proxy values outside the explicit contract cannot alter the URI                                                                 |
++| Embedded VibeCraft preview               | The application is rendered in a cross-origin iframe; the same public runtime origin also opens as a top-level page                                                         | Client UI detects `window.self !== window.top`; the iframe stays signed out and skips the current-session request; its unchanged login link points to the server start route with `target="_blank"` and `rel="noopener noreferrer"`; OAuth completes and returns to the application in the new top-level tab; ordinary top-level session loading and login remain unchanged          | N1–N6; no iframe-specific label/icon, popup-script navigation, OAuth redirect inside the frame, or attempt to authenticate the preview |
++| Logout origin rejection                  | Logout receives a malformed/duplicated/cross-origin `Origin`, or runtime-origin resolution fails; also test missing `Origin` without another CSRF mechanism                 | Reject before deleting the server session or clearing its cookie; a valid same-origin request revokes the server session first and then clears the cookie                                                                                                                                                                                                                            | N1–N5; request `Origin` is compared with the resolved origin but never becomes the origin source                                       |
++| Disconnect unchanged generated auth      | `yandex-id/disconnect`; secrets already absent                                                                                                                              | Remove Yandex routes/UI/env reads/provider-only models or dependencies; keep the app usable anonymously; tests prove no broken links; no secret read                                                                                                                                                                                                                                 | N1–N5; no requirement to restore credentials and no destructive data migration                                                         |
++| Disconnect after adjacent user changes   | Secrets are already absent and Yandex code shares files/helpers with later local auth/product changes                                                                       | Trace ownership, remove only proven connector branches, preserve shared/local behavior, report retained ambiguity, run unrelated auth/product regression tests                                                                                                                                                                                                                       | N1–N5; no whole-file deletion based only on filename or commit provenance                                                              |
++
++## Connect checklist
++
++- Authorization endpoint is `https://oauth.yandex.ru/authorize` with `response_type=code`, random state, S256 challenge, and a redirect URI derived by the shared proxy-aware runtime-origin helper plus the supplied callback path; `scope` and `optional_scope` are absent so the OAuth application's configured permissions apply.
++- The implementation reads the mandatory `code-url.md` and `user-information.md` references, uses the web redirect flow rather than console/device alternatives, and keeps their critical provider-specific requirements pinned in code and tests.
++- Start, callback, current-session lookup, and logout use only `__Host-vibecraft-oauth-state`, `__Host-vibecraft-oauth-verifier`, and `__Host-vibecraft-session`; every set and clear operation is `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, and has no `Domain`.
++- CDE and Serverless Container inputs with localhost `request.url`, public singleton `X-Forwarded-Host`, and `X-Forwarded-Proto: http` produce the public HTTPS origin; a validated public `Host` is the deploy/custom-domain fallback.
++- Invalid or comma-separated forwarded hosts fail closed, internal hosts are never emitted, and `Origin`/`Forwarded`/proto-only inputs cannot select a redirect host.
++- The supplied callback path executes only on the server, consumes state/verifier once, verifies the transaction's stored redirect binding, and exchanges the code at `https://oauth.yandex.ru/token` without adding an undocumented `redirect_uri` token field.
++- A structured diagnostic log contains only connector id and the resolved redirect URI, never the full authorization/callback URL or flow secrets.
++- Profile request uses `https://login.yandex.ru/info` and exactly `Authorization: OAuth <access_token>`, never `Bearer` or a query parameter, even when the token response says `token_type=bearer`.
++- A clean callback destination passed to `NextResponse.redirect` is an absolute URL derived from the validated public runtime origin, never a raw relative string or a URL based on internal `request.url`; every callback branch returns its concrete response with the required cookie mutations attached.
++- Browser session contains only an opaque application session id in `__Host-vibecraft-session`; revocable session state lives in DynamoDB.
++- Embedded preview skips current-session loading and keeps the normal login control text and appearance; only its server-start link gains `target="_blank"` and `rel="noopener noreferrer"`, while top-level authentication remains unchanged.
++- Logout fails before mutation when runtime-origin/CSRF validation fails, and invalidates the server record before clearing the cookie on success.
++- A runnable focused OAuth test command, migration when required, `npm run check`, and `npm run build` are recorded; lint/typecheck/build alone cannot complete the connector task.
++
++## Disconnect checklist
++
++- Removal succeeds without either connector secret.
++- Yandex start/callback/profile UI, env reads, and the three exact `__Host-vibecraft-*` cookie names are gone.
++- Shared auth, unrelated user data, sessions, routes, and later custom behavior remain.
++- Ambiguous provider data is retained and reported rather than destructively deleted.
++- Anonymous and unrelated authenticated behavior have regression coverage.
++
++## Fallback equivalence
++
++The browser-agent inline fallback may be shorter than this skill, but it passes only if it preserves the same security boundary:
++
++1. exact `yandex-id` action, callback path, and role-to-env-name context, plus the same validated proxy-aware runtime-origin contract with no caller-supplied or guessed absolute URL and no `scope` or `optional_scope` authorization parameters;
++2. server-only credentials, code exchange, and a profile request using exactly `Authorization: OAuth <access_token>` rather than `Bearer`, with tokens and logs kept free of sensitive values;
++3. validated supplied callback path, random state, S256 PKCE using only the exact `__Host-vibecraft-oauth-state` and `__Host-vibecraft-oauth-verifier` cookies, and an expiring server-side OAuth transaction that stores the derived callback URI and atomically verifies it during `pending → consumed` before provider access;
++4. server-only callback followed by a concrete clean response before layout/bridge rendering, with no relative string passed to `NextResponse.redirect` and no internal request URL used as the redirect base;
++5. opaque `__Host-vibecraft-session` cookie backed by revocable server-side state;
++6. connector failure creates no implementation/session side effect;
++7. disconnect works without secrets and preserves unrelated users, sessions, data, and custom changes.
++
++Mark the fallback case failed if any invariant is absent, if connector cookies are not attached to the exact returned response, or if no focused OAuth test command was executed, even when lint, typecheck, and build pass.
+diff --git a/.vibecraft/template.json b/.vibecraft/template.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..1587a669681c9a7e2aa097fbdc4b9882051fb58c
+--- /dev/null
++++ b/.vibecraft/template.json
+@@ -0,0 +1,3 @@
++{
++  "version": "1.0.0"
++}

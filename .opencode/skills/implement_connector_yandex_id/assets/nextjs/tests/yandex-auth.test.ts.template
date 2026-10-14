@@ -1,0 +1,475 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { createHash } from "node:crypto";
+import { NextRequest } from "next/server";
+import {
+  createAuthHandlers,
+  resolveRuntimeOrigin,
+  hash,
+  type AuthStore,
+  type SafeUser,
+} from "../lib/auth/core";
+
+const host = "preview.example.com";
+const callbackPath = "/api/oauth/yandex/callback-v2";
+function request(
+  path: string,
+  headers: Record<string, string> = {},
+  method = "GET"
+) {
+  return new NextRequest(`http://localhost:8080${path}`, {
+    method,
+    headers: {
+      "x-forwarded-host": host,
+      "x-forwarded-proto": "http",
+      ...headers,
+    },
+  });
+}
+function fixture() {
+  const transactions = new Map<
+    string,
+    { redirectUri: string; expiresAt: number }
+  >();
+  const sessions = new Map<string, SafeUser>();
+  let now = 1_700_000_000;
+  let providerCalls = 0;
+  let failPersist = false;
+  const user = { id: "test-user", displayName: "Test user" };
+  const store: AuthStore = {
+    async createTransaction(id, redirectUri, expiresAt) {
+      if (failPersist) throw Error("DB unavailable");
+      transactions.set(id, { redirectUri, expiresAt });
+    },
+    async consumeTransaction(id, redirectUri, time) {
+      const tx = transactions.get(id);
+      if (!tx || tx.redirectUri !== redirectUri || tx.expiresAt <= time)
+        throw Error("Invalid transaction");
+      transactions.delete(id);
+    },
+    async createSession(_profile, id) {
+      sessions.set(id, user);
+      return user;
+    },
+    async readSession(id) {
+      return sessions.get(id) ?? null;
+    },
+    async revokeSession(id) {
+      sessions.delete(id);
+    },
+  };
+  const handlers = createAuthHandlers(
+    {
+      callbackPath,
+      clientIdEnv: "TEST_YA_ID",
+      clientSecretEnv: "TEST_YA_SECRET",
+    },
+    store,
+    {
+      env: () => ({ TEST_YA_ID: "fake-id", TEST_YA_SECRET: "fake-secret" }),
+      now: () => now,
+      fetch: async (url, init) => {
+        providerCalls++;
+        if (String(url).endsWith("/token")) {
+          const body = new URLSearchParams(String(init?.body));
+          assert.equal(body.has("redirect_uri"), false);
+          assert.equal(body.get("grant_type"), "authorization_code");
+          assert.ok(body.get("code_verifier"));
+          return Response.json({
+            access_token: "fake-access-token",
+            token_type: "bearer",
+          });
+        }
+        assert.equal(
+          new Headers(init?.headers).get("authorization"),
+          "OAuth fake-access-token"
+        );
+        return Response.json({
+          id: "provider-id",
+          display_name: "Test user",
+          default_email: "ignored@example.com",
+        });
+      },
+      diagnostic: () => {},
+    }
+  );
+  async function start() {
+    const response = await handlers.start(request("/api/auth/yandex/start"));
+    const location = new URL(response.headers.get("location")!);
+    const cookies = response.cookies
+      .getAll()
+      .map((c) => `${c.name}=${c.value}`)
+      .join("; ");
+    return { response, location, cookies };
+  }
+  return {
+    handlers,
+    start,
+    transactions,
+    sessions,
+    user,
+    advance: () => {
+      now += 601;
+    },
+    failPersist: () => {
+      failPersist = true;
+    },
+    calls: () => providerCalls,
+  };
+}
+
+test("start uses supplied callback, S256 and allowlisted secure cookies on its returned response", async () => {
+  const f = fixture();
+  const { response, location } = await f.start();
+  assert.equal(location.origin, "https://oauth.yandex.ru");
+  assert.equal(
+    location.searchParams.get("redirect_uri"),
+    `https://${host}${callbackPath}`
+  );
+  assert.equal(location.searchParams.get("code_challenge_method"), "S256");
+  assert.equal(location.searchParams.has("scope"), false);
+  assert.equal(location.searchParams.has("optional_scope"), false);
+  assert.ok(location.searchParams.get("state")!.length >= 43);
+  assert.equal(
+    f.transactions.has(hash(location.searchParams.get("state")!)),
+    true
+  );
+  assert.equal(response.cookies.getAll().length, 2);
+  assert.equal(
+    location.searchParams.get("code_challenge"),
+    createHash("sha256")
+      .update(response.cookies.get("__Host-vibecraft-oauth-verifier")!.value)
+      .digest("base64url")
+  );
+  for (const cookie of response.cookies.getAll()) {
+    assert.match(cookie.name, /^__Host-vibecraft-oauth-(state|verifier)$/);
+    assert.equal(cookie.secure, true);
+    assert.equal(cookie.httpOnly, true);
+    assert.equal(cookie.sameSite, "lax");
+    assert.equal(cookie.path, "/");
+    assert.equal(cookie.domain, undefined);
+  }
+  const another = await f.start();
+  assert.notEqual(
+    location.searchParams.get("state"),
+    another.location.searchParams.get("state")
+  );
+});
+
+test("persistence failure and invalid origin never set OAuth cookies", async () => {
+  const f = fixture();
+  f.failPersist();
+  const response = await f.handlers.start(request("/start"));
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.has("set-cookie"), false);
+  const invalid = await f.handlers.start(
+    request("/start", { "x-forwarded-host": "localhost" })
+  );
+  assert.equal(invalid.status, 503);
+  assert.equal(invalid.headers.has("set-cookie"), false);
+});
+
+test("successful callback uses OAuth profile header, clean redirect, opaque session and consumes once", async () => {
+  const f = fixture();
+  const { location, cookies } = await f.start();
+  const url = `${callbackPath}?state=${location.searchParams.get("state")}&code=fake-code`;
+  const response = await f.handlers.callback(request(url, { cookie: cookies }));
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get("location"), `https://${host}/`);
+  assert.equal(response.cookies.get("__Host-vibecraft-oauth-state")?.maxAge, 0);
+  assert.equal(
+    response.cookies.get("__Host-vibecraft-oauth-verifier")?.maxAge,
+    0
+  );
+  const session = response.cookies.get("__Host-vibecraft-session")!;
+  assert.ok(session.value.length >= 43);
+  assert.ok(f.sessions.has(hash(session.value)));
+  const me = await f.handlers.session(
+    request("/session", { cookie: `${session.name}=${session.value}` })
+  );
+  assert.deepEqual(await me.json(), { user: f.user });
+  const replay = await f.handlers.callback(request(url, { cookie: cookies }));
+  assert.equal(replay.cookies.has("__Host-vibecraft-session"), false);
+  assert.equal(f.calls(), 2);
+});
+
+for (const variant of [
+  "missing",
+  "duplicate",
+  "mismatch",
+  "expired",
+  "wrong-origin",
+  "bad-origin",
+  "denied",
+  "mixed",
+  "missing-code",
+  "duplicate-code",
+  "missing-verifier",
+]) {
+  test(`callback rejects ${variant} without provider access and clears transient cookies`, async () => {
+    const f = fixture();
+    const { location, cookies } = await f.start();
+    const params = new URLSearchParams({
+      state: location.searchParams.get("state")!,
+      code: "fake-code",
+    });
+    if (variant === "missing") params.delete("state");
+    if (variant === "duplicate") params.append("state", "other");
+    if (variant === "mismatch") params.set("state", "other");
+    if (variant === "expired") f.advance();
+    if (variant === "denied") {
+      params.delete("code");
+      params.set("error", "access_denied");
+    }
+    if (variant === "mixed") params.set("error", "access_denied");
+    if (variant === "missing-code") params.delete("code");
+    if (variant === "duplicate-code") params.append("code", "other");
+    const cookie =
+      variant === "missing-verifier"
+        ? cookies
+            .split("; ")
+            .filter((c) => !c.startsWith("__Host-vibecraft-oauth-verifier="))
+            .join("; ")
+        : cookies;
+    const response = await f.handlers.callback(
+      request(`${callbackPath}?${params}`, {
+        cookie,
+        "x-forwarded-host":
+          variant === "wrong-origin"
+            ? "other.example.com"
+            : variant === "bad-origin"
+              ? "tunnel"
+              : host,
+      })
+    );
+    assert.equal(f.calls(), 0);
+    assert.equal(response.cookies.has("__Host-vibecraft-session"), false);
+    assert.equal(
+      response.cookies.get("__Host-vibecraft-oauth-state")?.maxAge,
+      0
+    );
+    assert.equal(
+      response.cookies.get("__Host-vibecraft-oauth-verifier")?.maxAge,
+      0
+    );
+    assert.doesNotMatch(
+      response.headers.get("location") ?? "",
+      /code=|state=|localhost|tunnel/
+    );
+  });
+}
+
+test("concurrent callbacks produce at most one session", async () => {
+  const f = fixture();
+  const { location, cookies } = await f.start();
+  const make = () =>
+    request(
+      `${callbackPath}?state=${location.searchParams.get("state")}&code=fake`,
+      { cookie: cookies }
+    );
+  const results = await Promise.all([
+    f.handlers.callback(make()),
+    f.handlers.callback(make()),
+  ]);
+  assert.equal(
+    results.filter((r) => r.cookies.has("__Host-vibecraft-session")).length,
+    1
+  );
+  assert.equal(f.calls(), 2);
+});
+
+test("logout rejects missing or cross-origin Origin before mutation, then revokes session", async () => {
+  const f = fixture();
+  f.sessions.set(hash("fake-session"), f.user);
+  for (const origin of [
+    "",
+    "https://attacker.example.com",
+    `https://${host}/path`,
+    `https://${host}, https://${host}`,
+  ]) {
+    const response = await f.handlers.logout(
+      request(
+        "/logout",
+        { origin, cookie: "__Host-vibecraft-session=fake-session" },
+        "POST"
+      )
+    );
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.has("set-cookie"), false);
+    assert.equal(f.sessions.size, 1);
+  }
+  const response = await f.handlers.logout(
+    request(
+      "/logout",
+      {
+        origin: `https://${host}`,
+        cookie: "__Host-vibecraft-session=fake-session",
+      },
+      "POST"
+    )
+  );
+  assert.equal(response.status, 200);
+  assert.equal(f.sessions.size, 0);
+  assert.equal(response.cookies.get("__Host-vibecraft-session")?.maxAge, 0);
+});
+
+test("anonymous and legacy-cookie requests do not authenticate", async () => {
+  const f = fixture();
+  f.sessions.set(hash("legacy"), f.user);
+  const response = await f.handlers.session(
+    request("/session", { cookie: "session=legacy" })
+  );
+  assert.deepEqual(await response.json(), { user: null });
+  assert.match(response.headers.get("cache-control")!, /no-store/);
+});
+
+test("origin handles supported proxies and rejects malicious hosts", () => {
+  assert.equal(resolveRuntimeOrigin(request("/")), `https://${host}`);
+  assert.equal(
+    resolveRuntimeOrigin(
+      new NextRequest("http://localhost:8080", { headers: { host } })
+    ),
+    `https://${host}`
+  );
+  assert.equal(
+    resolveRuntimeOrigin(new NextRequest("https://deploy.example.com/path")),
+    "https://deploy.example.com"
+  );
+  for (const bad of [
+    "",
+    "localhost",
+    "tunnel",
+    "127.0.0.1",
+    "[::1]",
+    "foo.local",
+    "foo.internal",
+    "app.corp",
+    "app.intranet",
+    "foo..com",
+    "-foo.com",
+    "foo.com:0",
+    "foo.com:99999",
+    "foo.com,bar.com",
+    "foo.com/path",
+    "user@foo.com",
+    "foo.com?x",
+    "foo.com#x",
+    "foo.com\\x",
+  ]) {
+    assert.throws(() =>
+      resolveRuntimeOrigin(request("/", { "x-forwarded-host": bad }))
+    );
+  }
+  assert.throws(() =>
+    resolveRuntimeOrigin(new NextRequest("http://localhost:8080"))
+  );
+});
+
+test("invalid caller values fail before side effects", () => {
+  for (const path of [
+    "https://evil.example.com",
+    "//evil.example.com",
+    "/\\evil.example.com",
+    "/callback?x",
+    "/callback#x",
+  ]) {
+    assert.throws(() =>
+      createAuthHandlers(
+        { callbackPath: path, clientIdEnv: "ID", clientSecretEnv: "SECRET" },
+        {} as AuthStore
+      )
+    );
+  }
+});
+
+for (const response of [
+  Response.json({ error: "fake-sensitive-value" }, { status: 400 }),
+  Response.json({ access_token: "" }),
+  new Response("invalid-json"),
+]) {
+  test("provider failure cannot create a session or disclose its response", async () => {
+    const f = fixture();
+    const { location, cookies } = await f.start();
+    const store: AuthStore = {
+      createTransaction: async () => {},
+      consumeTransaction: async () => {},
+      createSession: async () => {
+        assert.fail("must not create session");
+      },
+      readSession: async () => null,
+      revokeSession: async () => {},
+    };
+    const handlers = createAuthHandlers(
+      { callbackPath, clientIdEnv: "ID", clientSecretEnv: "SECRET" },
+      store,
+      {
+        env: () => ({ ID: "fake", SECRET: "fake" }),
+        fetch: async () => response.clone(),
+      }
+    );
+    const result = await handlers.callback(
+      request(
+        `${callbackPath}?state=${location.searchParams.get("state")}&code=fake`,
+        { cookie: cookies }
+      )
+    );
+    assert.equal(result.cookies.has("__Host-vibecraft-session"), false);
+    assert.doesNotMatch(
+      await result.text(),
+      /fake-sensitive-value|invalid-json/
+    );
+  });
+}
+test("missing credential names are safe and runtime values never become errors", async () => {
+  const handlers = createAuthHandlers(
+    { callbackPath, clientIdEnv: "ID", clientSecretEnv: "SECRET" },
+    {} as AuthStore,
+    { env: () => ({ ID: "fake-private-id" }) }
+  );
+  const result = await handlers.start(request("/start"));
+  assert.deepEqual(await result.json(), {
+    error: "missing environment variable: SECRET",
+  });
+  assert.equal(result.headers.has("set-cookie"), false);
+});
+
+for (const profileResponse of [
+  Response.json({}, { status: 503 }),
+  Response.json({ id: 123 }),
+  new Response("not-json"),
+]) {
+  test("profile-stage failure never creates session or discloses provider data", async () => {
+    const f = fixture();
+    const { location, cookies } = await f.start();
+    const store: AuthStore = {
+      createTransaction: async () => {},
+      consumeTransaction: async () => {},
+      createSession: async () => {
+        assert.fail("must not create session");
+      },
+      readSession: async () => null,
+      revokeSession: async () => {},
+    };
+    let calls = 0;
+    const handlers = createAuthHandlers(
+      { callbackPath, clientIdEnv: "ID", clientSecretEnv: "SECRET" },
+      store,
+      {
+        env: () => ({ ID: "fake", SECRET: "fake" }),
+        fetch: async () =>
+          ++calls === 1
+            ? Response.json({ access_token: "fake" })
+            : profileResponse.clone(),
+      }
+    );
+    const result = await handlers.callback(
+      request(
+        `${callbackPath}?state=${location.searchParams.get("state")}&code=fake`,
+        { cookie: cookies }
+      )
+    );
+    assert.equal(calls, 2);
+    assert.equal(result.cookies.has("__Host-vibecraft-session"), false);
+    assert.equal(result.cookies.get("__Host-vibecraft-oauth-state")?.maxAge, 0);
+  });
+}

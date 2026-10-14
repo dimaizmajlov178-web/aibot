@@ -1,0 +1,23 @@
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/components/yandex-login.tsx.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/components/yandex-login.tsx.template
+index 6581ae337743b0e55648b3b4430fde09b83907fb..2c618bf4716a0d05ef7b9a4e57171aeb173487de 100644
+--- a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/components/yandex-login.tsx.template
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/components/yandex-login.tsx.template
+@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
+ import { LogIn, LogOut } from "lucide-react";
+ import { toast } from "sonner";
+ import { Skeleton } from "@/components/ui/skeleton";
+-import { Button, buttonVariants } from "@/components/ui/button";
++import { Button } from "@/components/ui/button";
++import { buttonVariants } from "@/components/ui/button-variants";
+ import {
+   loginLink,
+   loadCurrentUser,
+diff --git a/.vibecraft/template.json b/.vibecraft/template.json
+index ca84e70e9ef3dd12e0bf613e1d500f74b4ccbaf8..9a8bfb28c398f28b3a5bbd2fa1d5e25c9887e190 100644
+--- a/.vibecraft/template.json
++++ b/.vibecraft/template.json
+@@ -1,3 +1,3 @@
+ {
+-  "version": "1.0.1"
++  "version": "1.0.2"
+ }

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-bot-core"
+version = "1.0.0"
+description = "Python-ядро Telegram trading-бота: торговый цикл, риск-менеджмент и парсинг AI-ответа"
+requires-python = ">=3.10"
+dependencies = [
+  "pydantic>=2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "pytest-asyncio>=0.23",
+  "pytest-cov>=4.1",
+  "pydantic>=2.0,<3",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=pycore --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["pycore"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 70
+
+[tool.setuptools.packages.find]
+include = ["pycore*"]

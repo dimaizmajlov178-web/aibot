@@ -1,0 +1,24 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { loginLink, loadCurrentUser } from "../lib/auth/client";
+
+test("embedded UI opens an ordinary login anchor in a new tab and never probes session", async () => {
+  assert.deepEqual(loginLink(true), {
+    href: "/api/auth/yandex/start",
+    target: "_blank",
+    rel: "noopener noreferrer",
+  });
+  const user = await loadCurrentUser(true, async () => {
+    assert.fail("iframe must not request session");
+  });
+  assert.equal(user, null);
+});
+test("top-level UI keeps same-tab login and loads only the safe user view", async () => {
+  assert.deepEqual(loginLink(false), { href: "/api/auth/yandex/start" });
+  const user = await loadCurrentUser(false, async () =>
+    Response.json({
+      user: { id: "user", displayName: "Person", extra: "discarded" },
+    })
+  );
+  assert.deepEqual(user, { id: "user", displayName: "Person" });
+});

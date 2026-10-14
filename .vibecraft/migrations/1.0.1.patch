@@ -1,0 +1,2071 @@
+diff --git a/.opencode/skills/implement_connector_yandex_id/SKILL.md b/.opencode/skills/implement_connector_yandex_id/SKILL.md
+index 6cdae29a48e59505d039a73a4cc9dba75b2cbddd..b80e1f07e7c0fc3f3bfdbffe0f621d0dc9468fdc 100644
+--- a/.opencode/skills/implement_connector_yandex_id/SKILL.md
++++ b/.opencode/skills/implement_connector_yandex_id/SKILL.md
+@@ -5,192 +5,54 @@ description: Use when handling connector=yandex-id with action=connect or action
+ 
+ # Implement Yandex ID Connector
+ 
+-Implement or remove Yandex ID OAuth without changing unrelated product behavior. Follow this contract even when a library offers a shorter default flow.
++Connect Yandex ID by integrating the ready Next.js implementation and executable tests in [assets/nextjs](assets/nextjs). Adapt the existing product at the integration boundaries below. The complete provider/security contract is in [references/contract.md](references/contract.md); consult the relevant section when changing bundled behavior. [evals.md](evals.md) evaluates the skill itself, not a list of new test files to invent for each application.
+ 
+-## Caller contract
++## Validate caller context before editing
+ 
+-The caller context must contain:
++Require `connector id: yandex-id`, `connector action: connect | disconnect`, a same-origin absolute `callback path`, and environment-variable **names** mapped to `client_id` and `client_secret`. The callback must start with one `/` and contain no query, fragment, backslash, or whitespace. Env names must be distinct server-only identifiers. Never infer defaults.
+ 
+-```text
+-connector id: yandex-id
+-connector action: connect | disconnect
+-callback path: <same-origin absolute path>
+-environment variables:
+-  - client_id: <environment variable name>
+-  - client_secret: <environment variable name>
+-```
++If a public input is missing or malformed, stop before editing and name that field. If context contains a credential value, do not repeat/use/save it; stop and report that it must be replaced through the protected connector UI. Disconnect never reads credential values and must work after secrets are deleted.
+ 
+-Validate the connector id, action, callback path, and both role-to-environment-variable mappings before editing. The callback path and environment-variable names come only from this caller contract; do not replace them with provider-specific defaults.
++## Connect: integrate, then verify
+ 
+-If a required public input is absent or malformed, stop and report its name. Never ask the user to paste a credential into chat. If a credential value unexpectedly appears in context, do not repeat, use, log, or save it; stop before editing and report that it must be replaced through the protected connector UI.
++1. Inspect existing auth/users/status rules, `lib/schema.ts`, `lib/db.ts`, routes, UI entry point, and test commands. Preserve the product, health/bridge/toaster, other cookies, and unrelated data. Keep pages public unless the product request asks for access control.
++2. Read the current official [web code flow](https://yandex.ru/dev/id/doc/ru/codes/code-url.md) and [profile request](https://yandex.ru/dev/id/doc/ru/user-information.md). If unavailable, use the pinned contract and bundled implementation.
++3. Follow [integration.md](integration.md) to copy `.template` files to their specified destinations, removing only the `.template` suffix. Inspect every destination first. When a destination already exists, merge only the connector-owned behavior; never overwrite the file wholesale. Reuse the bundled route tests and client-policy tests. No new test dependency is needed: the template already has `tsx` and Node's test runner.
++4. For a new auth subsystem, use the bundled DynamoDB adapter. For existing users/auth, adapt `AuthStore` to existing models and eligibility rules; do not introduce a parallel user system without an explicit product decision. Preserve status, roles and profile data; never link by email alone. Keep provider tokens ephemeral.
++5. Fill the four **public** placeholders in `lib/auth/server.ts`: caller callback path, two caller env names, and the merged table name. Place callback `route.ts` at that exact caller path. Keep the other route paths aligned with the UI helpers. Runtime credentials are read at request time only.
++6. Merge the single-table schema entry and integrate `YandexLogin` into existing chrome. Existing visual components and copy take precedence; preserve identical login appearance in/out of an iframe. Embedded UI skips session loading and uses an ordinary new-tab link. Reuse the project's Skeleton; copy the supplied primitive only if absent.
++7. Run `npm run test:yandex-auth` immediately after integration. Add a failing regression **before changing** a bundled behavior or adapter; run it again after the change. Do not recreate the bundled test suite or add a second runner. Record the first failure and final result. If higher-priority instructions prohibit focused tests, report the verification blocker and do not claim completion.
++8. Run the required DynamoDB migration after schema changes, then the project's final check/build commands on the host. Keep focused tests separate from expensive final checks. A caller instruction to run lint/build only at the end does not replace OAuth tests. Respect an explicit caller prohibition; the skill cannot override it.
+ 
+-## Mandatory implementation references
++## What is already implemented and tested
+ 
+-Before editing `connect` behavior, read the current official Markdown documentation for the web Authorization Code flow:
++| Files                                                                 | Responsibility                                                                                                                                             |
++| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
++| `lib/auth/core.ts.template`                                           | Exact proxy origin resolution, runtime config, state/S256, returned-response cookies, callback cleanup, provider exchange, current session and POST logout |
++| `lib/auth/dynamodb.ts.template`                                       | Hashed single-use OAuth transactions, distinct Yandex identities, atomic session creation/eligibility check, expiry and revocation                         |
++| `lib/auth/server.ts.template`, `routes/*.ts.template`                 | Server-only boundary and small Next.js route adapters; caller-specific values are explicit placeholders                                                    |
++| `lib/auth/client.ts.template`, `components/yandex-login.tsx.template` | Session loading and embedded/top-level login behavior; component integrates with existing shadcn UI                                                        |
++| `tests/*.test.ts.template`                                            | Real NextResponse regressions, mocked provider/DB boundaries, concurrency, logout and client policy                                                        |
+ 
+-- [Receiving a confirmation code from the redirect URL](https://yandex.ru/dev/id/doc/ru/codes/code-url.md) for the authorization request, callback parameters, PKCE, and token exchange;
+-- [Exchanging the token for user information](https://yandex.ru/dev/id/doc/ru/user-information.md) for the profile request and its provider-specific authorization scheme.
++The test bundle covers reusable behavior. Add product-specific adapter/UI regressions where integration changes behavior. Client-policy tests do not substitute for checking the final rendered application; storage-command tests do not prove a real database migration or provider login.
+ 
+-[Requesting an OAuth token with a confirmation code](https://yandex.ru/dev/id/doc/ru/codes/code-and-token.md) is an optional overview. Do not use the console-oriented [`screen-code`](https://yandex.ru/dev/id/doc/ru/codes/screen-code.md) or device-oriented [`screen-code-oauth`](https://yandex.ru/dev/id/doc/ru/codes/screen-code-oauth.md) flows for a VibeCraft web application. If the documentation is temporarily unavailable, follow the pinned contract below instead of substituting generic OAuth conventions.
++## Security boundaries to preserve
+ 
+-## Security invariants
++- Exact cookies: `__Host-vibecraft-oauth-state`, `__Host-vibecraft-oauth-verifier`, `__Host-vibecraft-session`; always HttpOnly, Secure, SameSite=Lax, Path=/, no Domain. Every mutation belongs to the returned response.
++- Runtime origin comes from the trusted ingress contract. Never use `Origin`/`Forwarded` as its source, hardcode a preview host, or downgrade cookies for local HTTP. Keep the documented ingress trust assumption local to the origin helper.
++- Authorization omits `scope` and `optional_scope`. Token exchange uses the verifier and does not add `redirect_uri`; profile authorization is exactly `OAuth <access_token>`.
++- Consume only a pending, unexpired transaction bound to the derived callback URI before provider access. No replay, unsafe email linking, or sessions for ineligible users.
++- Callback returns a clean, non-rendering response before layout/bridge execution. Secrets, codes, raw state/verifier, tokens, session IDs and raw profiles never enter client storage, logs, or artifacts. The start diagnostic contains only connector id and redirect URI.
++- Report inbound callback-query redaction as an external proxy/access-log concern; repository redaction alone does not verify it.
+ 
+-- Read credentials only from the two server-side environment variables supplied for the `client_id` and `client_secret` roles. Never add a `NEXT_PUBLIC_` equivalent or a real value to source, `.env.docker`, examples, commands, tests, or documentation.
+-- Keep the client secret, authorization code, PKCE verifier, provider access/refresh tokens, cookies, and application session identifiers out of browser bundles, HTML, URLs after the callback redirect, client-readable storage, client logs, server logs, traces, screenshots, and test artifacts.
+-- Implement the callback as a server-only Next.js Route Handler. It must redirect to a clean same-origin application URL before any page layout renders; the template bridge must never observe OAuth query parameters.
+-- Build `redirect_uri` on the server from the trusted VibeCraft runtime origin and the supplied callback path. Resolve that origin with the exact proxy-aware contract below; never accept a caller-supplied absolute URL or derive it from `Origin`/`Forwarded`.
+-- Omit both `scope` and `optional_scope` from the authorization request so Yandex uses the permissions selected by the user in the OAuth application settings. Never hardcode, narrow, or broaden those configured permissions in application code.
+-- Request the profile from `https://login.yandex.ru/info` with exactly `Authorization: OAuth <access_token>`. Never use `Bearer` or a query parameter for this request. The token endpoint's `"token_type": "bearer"` response does not change the Yandex ID profile endpoint's provider-specific `OAuth` authorization scheme.
+-- For the Yandex ID connector's OAuth transaction and application session cookies, use exactly these CDE-allowlisted names for every set, read, and clear operation: `__Host-vibecraft-oauth-state`, `__Host-vibecraft-oauth-verifier`, and `__Host-vibecraft-session`. Never introduce aliases, provider-specific alternatives, or a generic `session` cookie for this connector. Do not rename or otherwise change unrelated cookies owned by existing application features.
+-- Keep every Yandex ID connector cookie compliant with the `__Host-` contract: `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, and no `Domain`. Create state, verifier, or session values only after the trusted public runtime origin resolves to HTTPS. Required defensive cleanup may still expire an existing connector cookie when callback validation fails; use the same exact name and attributes plus `Max-Age=0` for every clear operation. An internal HTTP `request.url` behind the trusted CDE ingress does not justify omitting the cookie or weakening `Secure`.
+-- Put every connector `Set-Cookie`, including cleanup, on the exact `NextResponse` that the route returns. Read incoming cookies from the request cookie store, but do not mutate a detached cookie store and then construct a different response.
+-- Preserve `app/api/health/route.ts`, `BridgeProvider`, `HandshakeListener`, `Toaster`, existing routes, and unrelated DynamoDB/auth/user behavior.
+-- Never log request bodies or raw provider responses in auth code. Safe errors may name a missing environment variable or failed stage, never a value. Verify application-level redaction; separately report that inbound callback queries may require redaction in proxy/access-log infrastructure outside this repository.
++## Disconnect
+ 
+-## `connect` procedure
++Inventory ownership first. Remove Yandex routes, UI entry points and env reads; remove session/logout/helper dependencies only when unshared. Preserve other auth, users, data, status/roles and later customizations. Never drop a table or delete user records just because schema provisioning stops referencing it. Retain and report ambiguous/shared code. Update tests to verify anonymous behavior and preserved unrelated auth, then run focused tests and final checks. Remove unused runtime dependencies only after checking remaining imports. See the [full disconnect contract](references/contract.md#disconnect-procedure).
+ 
+-### 1. Inspect before editing
++## Result
+ 
+-Identify existing users, sessions, authorization rules, routes, UI entry points, data tables, and tests. Extend the current product instead of replacing it with an authentication demo. Keep routes public unless the product request explicitly requires access control.
++Report changed behavior, test/migration/check/build results, and safe remaining limitations. Do not mark complete without executable OAuth tests. Never include credentials or live flow identifiers.
+ 
+-### 2. Validate runtime configuration
++## Maintaining these assets
+ 
+-Create a server-only configuration helper that reads the two supplied environment variables at request time. Reject a missing or empty variable with a safe error that names only the supplied environment variable but never includes its value. Do not make image build or static analysis require runtime credentials.
+-
+-Validate the supplied callback path before using it: require a string that starts with exactly one `/`, has no query or fragment, and resolves to the same origin when passed to `new URL(callbackPath, runtimeOrigin)`.
+-
+-Create one server-only `resolveRuntimeOrigin(request)` helper and use it for every connector route. The application runs behind VibeCraft/Yandex Cloud proxies: the framework may expose `request.url` as `http://localhost:8080`, while the proxy supplies the public host. Resolve the origin in this order:
+-
+-1. If `X-Forwarded-Host` is present, require exactly one valid public host and return `https://<forwarded-host>`.
+-2. Otherwise, use `Host` only when it is a valid public host and differs from the host in `request.url`; this is the deploy/custom-domain fallback. Return `https://<host>`.
+-3. Otherwise, parse `request.url` and use its normalized origin only when it is already HTTPS.
+-4. If none applies, fail closed with the safe error `public origin is not configured`.
+-
+-For either host header, reject empty or overlong values, whitespace, commas, credentials, path/query/fragment delimiters, malformed ports, `localhost`, loopback addresses, `tunnel`, and other single-label/internal hostnames. Parse the whole value; never split a list or choose its first/last element. If `X-Forwarded-Host` is present but invalid, fail closed instead of falling through to another source. The accepted hostname must be a public FQDN; normalize it with the URL parser before interpolation.
+-
+-Treat an accepted proxy host as externally HTTPS even when `X-Forwarded-Proto` is `http`: in the supported CDE and Serverless Container paths that header describes the final internal hop after TLS termination. Do not let it downgrade the public origin, and do not scan a comma-separated proto list for a convenient value. `Origin`, `Forwarded`, and client-supplied redirect parameters are never origin sources.
+-
+-Keep this trust assumption local to the helper and document it in code: it is valid because the VibeCraft/Yandex Cloud ingress overwrites the routing headers before the application. Do not reuse the helper outside that trusted proxy boundary without reevaluating it. Append the validated callback path only after origin resolution, and do all of this before creating state, cookies, or database records. Do not add a connector-specific origin environment variable.
+-
+-Keep the resolver structurally equivalent to this deliberately small decision tree:
+-
+-```ts
+-const forwardedHost = request.headers.get("x-forwarded-host");
+-if (forwardedHost !== null) {
+-  const publicHost = parseSinglePublicHost(forwardedHost);
+-  if (!publicHost) throw publicOriginError();
+-  return `https://${publicHost}`;
+-}
+-
+-const requestUrl = parseCredentialFreeUrl(request.url);
+-const directHost = parseSinglePublicHost(request.headers.get("host"));
+-if (requestUrl && directHost && directHost !== requestUrl.host.toLowerCase()) {
+-  return `https://${directHost}`;
+-}
+-if (requestUrl?.protocol === "https:") return requestUrl.origin;
+-throw publicOriginError();
+-```
+-
+-`parseSinglePublicHost` must implement every rejection rule above, validate normalized DNS labels (not merely rely on `new URL()` accepting the input), reject IP literals, and return the normalized host with an optional valid port. Keep it independently unit-testable. Do not replace this decision tree with generic “trust proxy” middleware defaults.
+-
+-### 3. Start Authorization Code flow
+-
+-Add a server route such as `/api/auth/yandex/start` that:
+-
+-1. resolves and validates the runtime origin with the shared proxy-aware helper, then builds the absolute redirect URI from that origin and the supplied callback path;
+-2. creates a cryptographically random, high-entropy `state`;
+-3. creates a cryptographically random PKCE `code_verifier` and derives an S256 `code_challenge` with base64url encoding;
+-4. creates a short-lived DynamoDB OAuth transaction keyed by a hash of state, storing the validated redirect URI and expiry but no raw state or verifier;
+-5. builds the absolute `https://oauth.yandex.ru/authorize` destination with `response_type=code`, client id, the derived redirect URI, state, challenge, and `code_challenge_method=S256`, omitting both `scope` and `optional_scope` so the OAuth application's configured permissions apply;
+-6. creates the redirect response and sets `__Host-vibecraft-oauth-state` and `__Host-vibecraft-oauth-verifier` on that exact response with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`, and a narrow lifetime;
+-7. writes one structured server-side diagnostic log containing only the connector id and resolved redirect URI, then returns the prepared response.
+-
+-If transaction persistence fails, return an error response without any OAuth `Set-Cookie` headers. Do not set browser cookies before the server-side transaction exists.
+-
+-Do not weaken `Secure` cookies for the local HTTP smoke-test origin. Exercise the real login through a trusted HTTPS runtime origin or test the route response directly.
+-
+-### 4. Handle the supplied callback path
+-
+-The server-only callback must read state and the PKCE verifier only from `__Host-vibecraft-oauth-state` and `__Host-vibecraft-oauth-verifier`. It must:
+-
+-1. parse the cardinality of state, authorization code, and provider error parameters without trusting their values;
+-2. require exactly one returned state and validate it against the cookie before trusting provider errors or the authorization code;
+-3. for missing, duplicated, or mismatched state, clear the transient cookies, reject the callback, and leave any unmatched DynamoDB transaction to expire;
+-4. for a matching state, resolve the runtime origin with the same proxy-aware helper and derive the callback URI from the supplied path; if origin resolution fails, clear the transient cookies, reject the callback, and leave the transaction to expire; otherwise conditionally transition only an unexpired `pending` DynamoDB OAuth transaction whose stored redirect URI matches it to `consumed`; reject origin mismatch, expiry, replay, or concurrent-loser callbacks when this transition fails;
+-5. after any matched-state origin/consume attempt, clear the state and verifier cookies on every success or error path;
+-6. require exactly one of: a single authorization code, or a single provider error; reject missing, duplicated, or mixed code/error parameters before provider access;
+-7. reject provider errors without creating a user or session;
+-8. exchange the code server-side at `https://oauth.yandex.ru/token` using the documented `application/x-www-form-urlencoded` fields, the server credentials, and `code_verifier`; do not add `redirect_uri`, which is not part of the documented Yandex token request—the authorization request and the validated OAuth transaction own the redirect binding;
+-9. validate the token response and request the profile from `https://login.yandex.ru/info` with exactly `Authorization: OAuth <access_token>`, never `Bearer` and never a query parameter;
+-10. validate the profile and identify the external identity by provider plus the stable Yandex subject;
+-11. create or update the application user/session atomically, then return a clean same-origin redirect response carrying the session cookie.
+-
+-The clean destination is a relative application path, but `NextResponse.redirect` must receive an absolute URL built from the already validated public runtime origin, for example `NextResponse.redirect(new URL("/", runtimeOrigin), 302)`. Never pass `"/"`, `"/?auth_error=1"`, or another relative string directly to `NextResponse.redirect`, and never use the internal CDE `request.url` as its base. Set or clear cookies on that response object before returning it. If runtime-origin resolution itself fails, either return a safe non-rendering error response or a bare `NextResponse` with a constant relative `Location` header; do not call `NextResponse.redirect` with a relative string.
+-
+-Do not auto-link an existing local account using email alone. Preserve roles, account status, and unrelated profile data. Deny a new session for disabled, suspended, or otherwise ineligible accounts according to existing authorization rules. If the current product has no verified account-linking policy, keep the Yandex identity distinct and report the limitation.
+-
+-### 5. Store the application session server-side
+-
+-Use the template DynamoDB conventions for user, external identity, and session records. Add schema entries, typed model functions, validation, and migrations as needed.
+-
+-- Generate a new opaque random application session id after successful login.
+-- Put only that opaque id in `__Host-vibecraft-session` with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`, and a bounded lifetime. Store only a hash of the id in DynamoDB.
+-- Read the application session id only from `__Host-vibecraft-session`, and enforce expiry and revocation on every server-side lookup.
+-- Return only the safe application-user view from a current-session endpoint or server loader. Never return provider tokens or the raw provider profile.
+-- Discard provider tokens after profile loading when the product does not need later Yandex API calls. If ongoing access is required, keep tokens server-side, minimize their scope, and use an existing approved encryption/key-management facility. Never introduce plaintext token persistence as a fallback.
+-
+-### 6. Add logout and UI states
+-
+-Logout must read only `__Host-vibecraft-session`, invalidate the server-side session before clearing that exact cookie, and never fall back to another cookie name. Prefer a state-changing server action or POST route and use the same runtime-origin helper for same-origin validation. Treat the request `Origin` only as a value to compare with the independently resolved runtime origin, never as an origin source. Fail closed before session mutation when runtime-origin resolution fails, the header is malformed/duplicated, or it does not match. If the route permits a missing `Origin`, require an existing equivalent CSRF defense; do not silently treat absence as same-origin.
+-
+-Add signed-out, loading, and signed-in UI states using existing project components. Preserve the requested product flow and all unrelated pages. Do not expose raw provider fields in the browser.
+-
+-VibeCraft can render the application inside a cross-origin iframe. Detect this only in client UI with `window.self !== window.top`. While embedded, keep the preview signed out and do not call the current-session endpoint. Render the same login control text, iconography, and styling as in the top-level application, but make its ordinary anchor to the server-side authorization start route open with `target="_blank"` and `rel="noopener noreferrer"`. Use a direct link activated by the user's click, not `window.open`, and never navigate the iframe itself to the provider. OAuth completes in the new top-level tab and the clean callback redirect returns there. Outside an iframe, preserve the normal current-session loading and same-tab login behavior.
+-
+-### 7. Test and verify
+-
+-Before implementing executable OAuth behavior, add a regression test that fails for the behavior being introduced. Use fake credentials and mocked provider responses. If the project has no runnable test command, establish a minimal test harness and script; lint, typecheck, and build do not replace route-level tests. Add focused tests for:
+-
+-- missing or malformed caller context and runtime env names/values without value disclosure or file changes;
+-- CDE origin resolution from a singleton public `X-Forwarded-Host` when `request.url` is localhost, `Host` is `tunnel`, and `X-Forwarded-Proto` is `http`;
+-- Serverless Container origin resolution from its public forwarded host, plus the public `Host` fallback used by deploy/custom-domain ingress when the forwarded host is absent;
+-- HTTPS `request.url` fallback, derived redirect URI, authorization redirect without `scope` or `optional_scope`, random state, and S256 PKCE;
+-- start setting only `__Host-vibecraft-oauth-state` and `__Host-vibecraft-oauth-verifier` with the required attributes; callback reading and clearing those exact cookies on every required path; no legacy, provider-specific, or alias cookie names;
+-- malformed, comma-separated, credential-bearing, local, or internal host candidates failing before OAuth side effects at start and clearing transient cookies on callback;
+-- an HTTP localhost `request.url` without a valid public proxy host failing closed, while `X-Forwarded-Proto: http` does not downgrade an accepted public host;
+-- identical origin and redirect-URI resolution in start, callback, logout, and any same-origin validation;
+-- missing, duplicated, mismatched, expired, replayed, origin-mismatched, and concurrently consumed state;
+-- provider denial and token/profile failures;
+-- the profile request using exactly `Authorization: OAuth <access_token>`, never the token response's `Bearer` scheme and never a query parameter;
+-- successful callback, identity creation/linking policy, opaque session creation, and a concrete clean redirect response whose `Location` is either an absolute URL based on the validated public runtime origin or a constant relative header created without `NextResponse.redirect`;
+-- every error callback returning a concrete clean response instead of throwing while constructing a relative `NextResponse.redirect`;
+-- the start route returning no `Set-Cookie` headers when OAuth transaction persistence fails, and every success/error response carrying its own required cookie mutations;
+-- existing-user collision without unsafe email auto-linking and denial for ineligible accounts;
+-- current-session anonymous/authenticated responses;
+-- successful login setting only `__Host-vibecraft-session`; current-session lookup reading that exact cookie; logout revoking the server session before clearing that exact cookie with matching `__Host-` attributes;
+-- embedded and top-level UI behavior: the iframe skips current-session loading and opens the unchanged login link in a new tab with `noopener noreferrer`, while the top-level application keeps normal session loading and same-tab login;
+-- logout rejecting unresolved, malformed, missing-without-alternative-CSRF, and cross-origin requests before mutation, then revoking the server session before cookie clearing on success;
+-- signed-in and signed-out UI while unrelated product behavior remains intact;
+-- absence of OAuth parameters from rendered pages/bridge events and absence of secrets/tokens in logs or browser storage.
+-
+-Run and record the focused test command, the required DynamoDB migration when schema changes, `npm run check`, and `npm run build` on the host. Do not mark the connector task complete when no executable OAuth tests ran. Do not save a real authenticated Playwright storage state.
+-
+-## `disconnect` procedure
+-
+-Disconnect must work after connector secrets have already been deleted. Never read, recreate, or require either credential.
+-
+-1. Inventory Yandex-owned routes, UI, env reads/validation, runtime-origin integration, identity mapping, provider fields, dependencies, schema, and tests. Treat a proxy-aware origin helper as shared infrastructure when another feature uses it.
+-2. Remove Yandex-specific start/callback/profile routes and UI entry points introduced for this connector.
+-3. Remove connector-specific logout/session code only when it is not shared by local auth or another provider.
+-4. Remove Yandex env validation and reads. Remove a dependency only after proving no remaining import uses it.
+-5. Stop reading provider token/identity fields. Remove schema/model fields only when they are exclusively Yandex-owned and removal is nondestructive.
+-6. Preserve unrelated users, user data, sessions, roles, account rules, custom UI, and later adjacent changes. Do not delete a DynamoDB table or user records merely because schema provisioning no longer references them.
+-7. If ownership is ambiguous after user customization, make the smallest behavior-preserving change and list the retained ambiguity in the execution result.
+-8. Add or update tests proving anonymous behavior, absence of Yandex login/broken auth links, and continued operation of unrelated auth and product flows.
+-9. Run focused tests, `npm run check`, and `npm run build`. Scan executable code for the callback path, Yandex endpoints, env reads, provider UI, the three exact `__Host-vibecraft-*` names, legacy cookie names, and unused dependencies.
+-
+-The execution result must summarize behavior changed, verification performed, and any safe follow-up. Never include credentials, codes, tokens, cookies, or session identifiers.
+-
+-## Framework reference
+-
+-- [NextResponse redirect](https://nextjs.org/docs/app/api-reference/functions/next-response#redirect)
++Run `node .opencode/skills/implement_connector_yandex_id/scripts/verify-assets.mjs` from the template root; it materializes the assets in a temporary project and runs tests, typecheck and focused lint. Add `--build` to verify the materialized Next.js application. This is a maintainer command, not a dependency or step to add to a generated application's startup.
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/components/ui/skeleton.tsx.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/components/ui/skeleton.tsx.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..a752a21c2b99302e9dab318d503e4f13cfdecd87
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/components/ui/skeleton.tsx.template
+@@ -0,0 +1,12 @@
++import { type ComponentProps } from "react";
++import { cn } from "@/lib/utils";
++
++export function Skeleton({ className, ...props }: ComponentProps<"div">) {
++  return (
++    <div
++      data-slot="skeleton"
++      className={cn("bg-accent animate-pulse rounded-md", className)}
++      {...props}
++    />
++  );
++}
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/components/yandex-login.tsx.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/components/yandex-login.tsx.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..6581ae337743b0e55648b3b4430fde09b83907fb
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/components/yandex-login.tsx.template
+@@ -0,0 +1,80 @@
++"use client";
++
++import { useEffect, useState } from "react";
++import { LogIn, LogOut } from "lucide-react";
++import { toast } from "sonner";
++import { Skeleton } from "@/components/ui/skeleton";
++import { Button, buttonVariants } from "@/components/ui/button";
++import {
++  loginLink,
++  loadCurrentUser,
++  type SessionUser,
++} from "@/lib/auth/client";
++
++// Integrate this control in existing chrome; preserve its label and appearance in embedded preview.
++export function YandexLogin() {
++  const [embedded, setEmbedded] = useState<boolean | null>(null);
++  const [user, setUser] = useState<SessionUser | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [loggingOut, setLoggingOut] = useState(false);
++  useEffect(() => {
++    let active = true;
++    const inFrame = window.self !== window.top;
++    setEmbedded(inFrame);
++    loadCurrentUser(inFrame)
++      .then((value) => {
++        if (active) setUser(value);
++      })
++      .catch(() => {
++        if (active) toast.error("Не удалось проверить вход");
++      })
++      .finally(() => {
++        if (active) setLoading(false);
++      });
++    return () => {
++      active = false;
++    };
++  }, []);
++  async function logout() {
++    setLoggingOut(true);
++    try {
++      const response = await fetch("/api/auth/logout", {
++        method: "POST",
++        credentials: "same-origin",
++      });
++      if (!response.ok) throw new Error("Logout failed");
++      setUser(null);
++    } catch {
++      toast.error("Не удалось выйти");
++    } finally {
++      setLoggingOut(false);
++    }
++  }
++  if (loading || embedded === null)
++    return (
++      <Skeleton
++        className="h-9 w-40"
++        role="status"
++        aria-label="Проверяем вход"
++      />
++    );
++  if (!user || embedded)
++    return (
++      <a
++        className={buttonVariants({ variant: "outline" })}
++        {...loginLink(embedded)}
++      >
++        <LogIn aria-hidden="true" />
++        Войти через Яндекс
++      </a>
++    );
++  return (
++    <div className="flex items-center gap-2">
++      <span>{user.displayName}</span>
++      <Button variant="outline" disabled={loggingOut} onClick={logout}>
++        <LogOut aria-hidden="true" />
++        Выйти
++      </Button>
++    </div>
++  );
++}
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/client.ts.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/client.ts.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..fe852514f748fe80fabb965f7b8f5cc45f4d2aa8
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/client.ts.template
+@@ -0,0 +1,29 @@
++export interface SessionUser {
++  id: string;
++  displayName: string;
++}
++export function loginLink(embedded: boolean) {
++  return {
++    href: "/api/auth/yandex/start",
++    ...(embedded ? { target: "_blank", rel: "noopener noreferrer" } : {}),
++  };
++}
++export async function loadCurrentUser(
++  embedded: boolean,
++  request: typeof fetch = fetch
++): Promise<SessionUser | null> {
++  if (embedded) return null;
++  const response = await request("/api/auth/session", {
++    cache: "no-store",
++    credentials: "same-origin",
++  });
++  if (!response.ok) throw new Error("Session is unavailable");
++  const data = await response.json();
++  if (data.user === null) return null;
++  if (
++    typeof data.user?.id !== "string" ||
++    typeof data.user?.displayName !== "string"
++  )
++    throw new Error("Invalid session response");
++  return { id: data.user.id, displayName: data.user.displayName };
++}
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/core.ts.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/core.ts.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..b6554fe8d7e27e7242d21b20b5094eb11b538518
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/core.ts.template
+@@ -0,0 +1,362 @@
++import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
++import { NextRequest, NextResponse } from "next/server";
++import { z } from "zod";
++
++export interface SafeUser {
++  id: string;
++  displayName: string;
++}
++export interface ProviderProfile {
++  id: string;
++  displayName: string;
++}
++export interface AuthStore {
++  createTransaction(
++    stateHash: string,
++    redirectUri: string,
++    expiresAt: number
++  ): Promise<void>;
++  consumeTransaction(
++    stateHash: string,
++    redirectUri: string,
++    now: number
++  ): Promise<void>;
++  createSession(
++    profile: ProviderProfile,
++    sessionHash: string,
++    expiresAt: number
++  ): Promise<SafeUser>;
++  readSession(sessionHash: string, now: number): Promise<SafeUser | null>;
++  revokeSession(sessionHash: string): Promise<void>;
++}
++export interface AuthConfig {
++  callbackPath: string;
++  clientIdEnv: string;
++  clientSecretEnv: string;
++}
++interface Dependencies {
++  env: () => Record<string, string | undefined>;
++  now: () => number;
++  fetch: typeof fetch;
++  diagnostic: (data: { connector: string; redirectUri: string }) => void;
++}
++const stateCookie = "__Host-vibecraft-oauth-state";
++const verifierCookie = "__Host-vibecraft-oauth-verifier";
++const sessionCookie = "__Host-vibecraft-session";
++const attributes = {
++  httpOnly: true,
++  secure: true,
++  sameSite: "lax",
++  path: "/",
++} as const;
++const transactionSeconds = 600;
++const sessionSeconds = 7 * 24 * 60 * 60;
++export const hash = (value: string) =>
++  createHash("sha256").update(value).digest("hex");
++const random = () => randomBytes(32).toString("base64url");
++const originError = () => new Error("public origin is not configured");
++
++function publicHost(value: string | null): string | null {
++  if (!value || value.length > 259 || /[\s,@/\\?#%]/.test(value)) return null;
++  const match = /^([a-zA-Z0-9.-]+)(?::([0-9]+))?$/.exec(value);
++  if (!match) return null;
++  const hostname = match[1].toLowerCase();
++  const labels = hostname.split(".");
++  if (
++    hostname.length > 253 ||
++    labels.length < 2 ||
++    !/[a-z]/.test(labels.at(-1)!)
++  )
++    return null;
++  if (
++    labels.some(
++      (label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)
++    )
++  )
++    return null;
++  if (
++    [
++      "localhost",
++      "local",
++      "internal",
++      "test",
++      "invalid",
++      "lan",
++      "home",
++      "localdomain",
++      "corp",
++      "intranet",
++      "private",
++    ].includes(labels.at(-1)!)
++  )
++    return null;
++  if (match[2] && (+match[2] < 1 || +match[2] > 65535)) return null;
++  try {
++    return new URL(`https://${value}`).host;
++  } catch {
++    return null;
++  }
++}
++
++export function resolveRuntimeOrigin(request: NextRequest): string {
++  // VibeCraft/Yandex Cloud ingress overwrites routing headers. Do not use outside this trust boundary.
++  const forwarded = request.headers.get("x-forwarded-host");
++  if (forwarded !== null) {
++    const host = publicHost(forwarded);
++    if (!host) throw originError();
++    return `https://${host}`;
++  }
++  let url: URL | undefined;
++  try {
++    const parsed = new URL(request.url);
++    if (!parsed.username && !parsed.password) url = parsed;
++  } catch {
++    /* Fail closed below. */
++  }
++  const host = publicHost(request.headers.get("host"));
++  if (url && host && host !== url.host.toLowerCase()) return `https://${host}`;
++  if (url?.protocol === "https:") return url.origin;
++  throw originError();
++}
++
++class ConfigurationError extends Error {}
++
++function validateConfig(config: AuthConfig) {
++  if (
++    typeof config.callbackPath !== "string" ||
++    !/^\/(?!\/)/.test(config.callbackPath) ||
++    /[?#\\\s]/.test(config.callbackPath) ||
++    new URL(config.callbackPath, "https://validation.example.com").origin !==
++      "https://validation.example.com"
++  )
++    throw new Error("invalid callback path");
++  for (const role of ["clientIdEnv", "clientSecretEnv"] as const) {
++    if (
++      typeof config[role] !== "string" ||
++      !/^[A-Za-z_][A-Za-z0-9_]*$/.test(config[role]) ||
++      config[role].startsWith("NEXT_PUBLIC_")
++    )
++      throw new Error(`invalid ${role}`);
++  }
++  if (config.clientIdEnv === config.clientSecretEnv)
++    throw new Error("invalid environment variable mappings");
++}
++function equal(left: string, right: string) {
++  const a = Buffer.from(left);
++  const b = Buffer.from(right);
++  return a.length === b.length && timingSafeEqual(a, b);
++}
++function noCache(response: NextResponse) {
++  response.headers.set("Cache-Control", "no-store");
++  response.headers.set("Referrer-Policy", "no-referrer");
++  return response;
++}
++function clearTransient(response: NextResponse) {
++  response.cookies.set(stateCookie, "", { ...attributes, maxAge: 0 });
++  response.cookies.set(verifierCookie, "", { ...attributes, maxAge: 0 });
++  return response;
++}
++const tokenSchema = z.object({ access_token: z.string().min(1) });
++const profileSchema = z.object({
++  id: z.string().min(1).max(256),
++  display_name: z.string().max(256).optional(),
++});
++
++export function createAuthHandlers(
++  config: AuthConfig,
++  store: AuthStore,
++  overrides: Partial<Dependencies> = {}
++) {
++  validateConfig(config);
++  const deps: Dependencies = {
++    env: () => process.env,
++    now: () => Math.floor(Date.now() / 1000),
++    fetch: (...args) => fetch(...args),
++    diagnostic: (data) => console.info(JSON.stringify(data)),
++    ...overrides,
++  };
++  function credentials() {
++    const env = deps.env();
++    for (const name of [config.clientIdEnv, config.clientSecretEnv])
++      if (!env[name]?.trim())
++        throw new ConfigurationError(`missing environment variable: ${name}`);
++    return {
++      client_id: env[config.clientIdEnv]!,
++      client_secret: env[config.clientSecretEnv]!,
++    };
++  }
++  return {
++    async start(request: NextRequest) {
++      try {
++        const origin = resolveRuntimeOrigin(request);
++        const redirectUri = new URL(config.callbackPath, origin).href;
++        const { client_id } = credentials();
++        const state = random();
++        const verifier = random();
++        const challenge = createHash("sha256")
++          .update(verifier)
++          .digest("base64url");
++        await store.createTransaction(
++          hash(state),
++          redirectUri,
++          deps.now() + transactionSeconds
++        );
++        const destination = new URL("https://oauth.yandex.ru/authorize");
++        destination.search = new URLSearchParams({
++          response_type: "code",
++          client_id,
++          redirect_uri: redirectUri,
++          state,
++          code_challenge: challenge,
++          code_challenge_method: "S256",
++        }).toString();
++        const response = noCache(NextResponse.redirect(destination, 302));
++        response.cookies.set(stateCookie, state, {
++          ...attributes,
++          maxAge: transactionSeconds,
++        });
++        response.cookies.set(verifierCookie, verifier, {
++          ...attributes,
++          maxAge: transactionSeconds,
++        });
++        deps.diagnostic({ connector: "yandex-id", redirectUri });
++        return response;
++      } catch (error) {
++        return noCache(
++          NextResponse.json(
++            {
++              error:
++                error instanceof ConfigurationError
++                  ? error.message
++                  : "Authentication is unavailable",
++            },
++            { status: 503 }
++          )
++        );
++      }
++    },
++    async callback(request: NextRequest) {
++      let origin: string | undefined;
++      try {
++        const params = request.nextUrl.searchParams;
++        const state = params.getAll("state");
++        const cookie = request.cookies.get(stateCookie)?.value;
++        if (state.length !== 1 || !cookie || !equal(state[0], cookie))
++          throw new Error("invalid state");
++        origin = resolveRuntimeOrigin(request);
++        await store.consumeTransaction(
++          hash(cookie),
++          new URL(config.callbackPath, origin).href,
++          deps.now()
++        );
++        const code = params.getAll("code");
++        const error = params.getAll("error");
++        if (code.length !== 1 || !code[0] || error.length !== 0)
++          throw new Error("provider denied or malformed callback");
++        const verifier = request.cookies.get(verifierCookie)?.value;
++        if (!verifier || !/^[A-Za-z0-9_-]{43,128}$/.test(verifier))
++          throw new Error("missing verifier");
++        const tokenResponse = await deps.fetch(
++          "https://oauth.yandex.ru/token",
++          {
++            method: "POST",
++            redirect: "error",
++            signal: AbortSignal.timeout(10_000),
++            headers: { "Content-Type": "application/x-www-form-urlencoded" },
++            body: new URLSearchParams({
++              grant_type: "authorization_code",
++              code: code[0],
++              ...credentials(),
++              code_verifier: verifier,
++            }),
++          }
++        );
++        if (!tokenResponse.ok) throw new Error("token failed");
++        const token = tokenSchema.parse(await tokenResponse.json());
++        const profileResponse = await deps.fetch(
++          "https://login.yandex.ru/info",
++          {
++            headers: { Authorization: `OAuth ${token.access_token}` },
++            redirect: "error",
++            signal: AbortSignal.timeout(10_000),
++          }
++        );
++        if (!profileResponse.ok) throw new Error("profile failed");
++        const profile = profileSchema.parse(await profileResponse.json());
++        const session = random();
++        await store.createSession(
++          {
++            id: profile.id,
++            displayName: profile.display_name || "Yandex user",
++          },
++          hash(session),
++          deps.now() + sessionSeconds
++        );
++        const response = clearTransient(
++          noCache(NextResponse.redirect(new URL("/", origin), 302))
++        );
++        response.cookies.set(sessionCookie, session, {
++          ...attributes,
++          maxAge: sessionSeconds,
++        });
++        return response;
++      } catch {
++        // Never reflect provider values or render the callback through the application bridge.
++        const response = origin
++          ? NextResponse.redirect(new URL("/?auth_error=1", origin), 302)
++          : NextResponse.json(
++              { error: "Authentication failed" },
++              { status: 400 }
++            );
++        return clearTransient(noCache(response));
++      }
++    },
++    async session(request: NextRequest) {
++      try {
++        const session = request.cookies.get(sessionCookie)?.value;
++        const user = session
++          ? await store.readSession(hash(session), deps.now())
++          : null;
++        return noCache(
++          NextResponse.json({
++            user: user ? { id: user.id, displayName: user.displayName } : null,
++          })
++        );
++      } catch {
++        return noCache(
++          NextResponse.json(
++            { error: "Session is unavailable" },
++            { status: 503 }
++          )
++        );
++      }
++    },
++    async logout(request: NextRequest) {
++      try {
++        const origin = resolveRuntimeOrigin(request);
++        if (
++          request.method !== "POST" ||
++          request.headers.get("origin") !== origin
++        )
++          return noCache(
++            NextResponse.json({ error: "Invalid origin" }, { status: 403 })
++          );
++      } catch {
++        return noCache(
++          NextResponse.json({ error: "Invalid origin" }, { status: 403 })
++        );
++      }
++      try {
++        const session = request.cookies.get(sessionCookie)?.value;
++        if (session) await store.revokeSession(hash(session));
++        const response = noCache(NextResponse.json({ ok: true }));
++        response.cookies.set(sessionCookie, "", { ...attributes, maxAge: 0 });
++        return response;
++      } catch {
++        return noCache(
++          NextResponse.json({ error: "Logout is unavailable" }, { status: 503 })
++        );
++      }
++    },
++  };
++}
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/dynamodb.ts.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/dynamodb.ts.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..509fd0e3e3548942b260c3e413fcb8e41f4aa547
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/dynamodb.ts.template
+@@ -0,0 +1,147 @@
++import {
++  DynamoDBDocumentClient,
++  PutCommand,
++  UpdateCommand,
++  GetCommand,
++  DeleteCommand,
++  TransactWriteCommand,
++} from "@aws-sdk/lib-dynamodb";
++import { z } from "zod";
++import { hash, type AuthStore, type SafeUser } from "./core";
++
++const identitySchema = z.object({
++  userId: z.string(),
++  displayName: z.string(),
++  status: z.literal("active"),
++});
++const sessionSchema = z.object({
++  identityKey: z.string(),
++  expiresAt: z.number(),
++});
++
++// For a product without existing auth. Adapt this boundary to existing user/status policies when present.
++// One table, id (string HASH key): oauth#<state hash>, identity#yandex:<subject hash>, session#<session hash>.
++export function createDynamoAuthStore(
++  db: DynamoDBDocumentClient,
++  tableName: string
++): AuthStore {
++  const key = (id: string) => ({ TableName: tableName, Key: { id } });
++  return {
++    async createTransaction(stateHash, redirectUri, expiresAt) {
++      await db.send(
++        new PutCommand({
++          TableName: tableName,
++          Item: {
++            id: `oauth#${stateHash}`,
++            status: "pending",
++            redirectUri,
++            expiresAt,
++          },
++          ConditionExpression: "attribute_not_exists(id)",
++        })
++      );
++    },
++    async consumeTransaction(stateHash, redirectUri, now) {
++      await db.send(
++        new UpdateCommand({
++          ...key(`oauth#${stateHash}`),
++          UpdateExpression: "SET #status = :consumed",
++          ConditionExpression:
++            "#status = :pending AND expiresAt > :now AND redirectUri = :uri",
++          ExpressionAttributeNames: { "#status": "status" },
++          ExpressionAttributeValues: {
++            ":consumed": "consumed",
++            ":pending": "pending",
++            ":now": now,
++            ":uri": redirectUri,
++          },
++        })
++      );
++    },
++    async createSession(profile, sessionHash, expiresAt) {
++      // No email auto-link: each Yandex subject owns a distinct identity/user record.
++      const userId = `yandex:${hash(profile.id)}`;
++      const identityKey = `identity#${userId}`;
++      const sessionPut = {
++        TableName: tableName,
++        Item: { id: `session#${sessionHash}`, identityKey, expiresAt },
++        ConditionExpression: "attribute_not_exists(id)",
++      };
++      try {
++        await db.send(
++          new TransactWriteCommand({
++            TransactItems: [
++              {
++                Put: {
++                  TableName: tableName,
++                  Item: {
++                    id: identityKey,
++                    userId,
++                    displayName: profile.displayName,
++                    status: "active",
++                  },
++                  ConditionExpression: "attribute_not_exists(id)",
++                },
++              },
++              { Put: sessionPut },
++            ],
++          })
++        );
++        return { id: userId, displayName: profile.displayName };
++      } catch (error) {
++        if (
++          !(error instanceof Error) ||
++          error.name !== "TransactionCanceledException"
++        )
++          throw error;
++      }
++      const existing = await db.send(
++        new GetCommand({ ...key(identityKey), ConsistentRead: true })
++      );
++      const identity = identitySchema.parse(existing.Item);
++      // Recheck eligibility in the same transaction as session creation to avoid a suspension race.
++      await db.send(
++        new TransactWriteCommand({
++          TransactItems: [
++            {
++              ConditionCheck: {
++                ...key(identityKey),
++                ConditionExpression: "#status = :active AND userId = :userId",
++                ExpressionAttributeNames: { "#status": "status" },
++                ExpressionAttributeValues: {
++                  ":active": "active",
++                  ":userId": identity.userId,
++                },
++              },
++            },
++            { Put: sessionPut },
++          ],
++        })
++      );
++      return { id: identity.userId, displayName: identity.displayName };
++    },
++    async readSession(sessionHash, now): Promise<SafeUser | null> {
++      const result = await db.send(
++        new GetCommand({
++          ...key(`session#${sessionHash}`),
++          ConsistentRead: true,
++        })
++      );
++      const session = sessionSchema.safeParse(result.Item);
++      if (!session.success || session.data.expiresAt <= now) return null;
++      const user = await db.send(
++        new GetCommand({
++          ...key(session.data.identityKey),
++          ConsistentRead: true,
++        })
++      );
++      const identity = identitySchema.safeParse(user.Item);
++      return identity.success
++        ? { id: identity.data.userId, displayName: identity.data.displayName }
++        : null;
++    },
++    async revokeSession(sessionHash) {
++      await db.send(new DeleteCommand(key(`session#${sessionHash}`)));
++    },
++  };
++}
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/server.ts.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/server.ts.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..69ad7aeb6ae46d36a983d5b16b9b3fab74639a42
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/lib/auth/server.ts.template
+@@ -0,0 +1,14 @@
++import "server-only";
++import { docClient } from "../db";
++import { createAuthHandlers } from "./core";
++import { createDynamoAuthStore } from "./dynamodb";
++
++// Replace only these public integration values from the caller contract and merged schema.
++export const yandexAuth = createAuthHandlers(
++  {
++    callbackPath: "__CALLBACK_PATH__",
++    clientIdEnv: "__CLIENT_ID_ENV__",
++    clientSecretEnv: "__CLIENT_SECRET_ENV__",
++  },
++  createDynamoAuthStore(docClient, "__AUTH_TABLE_NAME__")
++);
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/callback.ts.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/callback.ts.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..5220046fbe2dfd30e15507243ac13840dd426087
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/callback.ts.template
+@@ -0,0 +1,5 @@
++import { yandexAuth } from "@/lib/auth/server";
++
++export const runtime = "nodejs";
++export const dynamic = "force-dynamic";
++export const GET = yandexAuth.callback;
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/logout.ts.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/logout.ts.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..8cf83253c0f263982f49e6acd84d6719ef976d94
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/logout.ts.template
+@@ -0,0 +1,5 @@
++import { yandexAuth } from "@/lib/auth/server";
++
++export const runtime = "nodejs";
++export const dynamic = "force-dynamic";
++export const POST = yandexAuth.logout;
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/session.ts.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/session.ts.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..34f910c45d8dcb6f77734bd4dd065b8785b819c8
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/session.ts.template
+@@ -0,0 +1,5 @@
++import { yandexAuth } from "@/lib/auth/server";
++
++export const runtime = "nodejs";
++export const dynamic = "force-dynamic";
++export const GET = yandexAuth.session;
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/start.ts.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/start.ts.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..75fe890995b0cc744b016601636848aab1c26696
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/routes/start.ts.template
+@@ -0,0 +1,5 @@
++import { yandexAuth } from "@/lib/auth/server";
++
++export const runtime = "nodejs";
++export const dynamic = "force-dynamic";
++export const GET = yandexAuth.start;
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/tests/yandex-auth.test.ts.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/tests/yandex-auth.test.ts.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..940c8a52ccf23baf1a4e23e9a91a814af970f40d
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/tests/yandex-auth.test.ts.template
+@@ -0,0 +1,475 @@
++import assert from "node:assert/strict";
++import { test } from "node:test";
++import { createHash } from "node:crypto";
++import { NextRequest } from "next/server";
++import {
++  createAuthHandlers,
++  resolveRuntimeOrigin,
++  hash,
++  type AuthStore,
++  type SafeUser,
++} from "../lib/auth/core";
++
++const host = "preview.example.com";
++const callbackPath = "/api/oauth/yandex/callback-v2";
++function request(
++  path: string,
++  headers: Record<string, string> = {},
++  method = "GET"
++) {
++  return new NextRequest(`http://localhost:8080${path}`, {
++    method,
++    headers: {
++      "x-forwarded-host": host,
++      "x-forwarded-proto": "http",
++      ...headers,
++    },
++  });
++}
++function fixture() {
++  const transactions = new Map<
++    string,
++    { redirectUri: string; expiresAt: number }
++  >();
++  const sessions = new Map<string, SafeUser>();
++  let now = 1_700_000_000;
++  let providerCalls = 0;
++  let failPersist = false;
++  const user = { id: "test-user", displayName: "Test user" };
++  const store: AuthStore = {
++    async createTransaction(id, redirectUri, expiresAt) {
++      if (failPersist) throw Error("DB unavailable");
++      transactions.set(id, { redirectUri, expiresAt });
++    },
++    async consumeTransaction(id, redirectUri, time) {
++      const tx = transactions.get(id);
++      if (!tx || tx.redirectUri !== redirectUri || tx.expiresAt <= time)
++        throw Error("Invalid transaction");
++      transactions.delete(id);
++    },
++    async createSession(_profile, id) {
++      sessions.set(id, user);
++      return user;
++    },
++    async readSession(id) {
++      return sessions.get(id) ?? null;
++    },
++    async revokeSession(id) {
++      sessions.delete(id);
++    },
++  };
++  const handlers = createAuthHandlers(
++    {
++      callbackPath,
++      clientIdEnv: "TEST_YA_ID",
++      clientSecretEnv: "TEST_YA_SECRET",
++    },
++    store,
++    {
++      env: () => ({ TEST_YA_ID: "fake-id", TEST_YA_SECRET: "fake-secret" }),
++      now: () => now,
++      fetch: async (url, init) => {
++        providerCalls++;
++        if (String(url).endsWith("/token")) {
++          const body = new URLSearchParams(String(init?.body));
++          assert.equal(body.has("redirect_uri"), false);
++          assert.equal(body.get("grant_type"), "authorization_code");
++          assert.ok(body.get("code_verifier"));
++          return Response.json({
++            access_token: "fake-access-token",
++            token_type: "bearer",
++          });
++        }
++        assert.equal(
++          new Headers(init?.headers).get("authorization"),
++          "OAuth fake-access-token"
++        );
++        return Response.json({
++          id: "provider-id",
++          display_name: "Test user",
++          default_email: "ignored@example.com",
++        });
++      },
++      diagnostic: () => {},
++    }
++  );
++  async function start() {
++    const response = await handlers.start(request("/api/auth/yandex/start"));
++    const location = new URL(response.headers.get("location")!);
++    const cookies = response.cookies
++      .getAll()
++      .map((c) => `${c.name}=${c.value}`)
++      .join("; ");
++    return { response, location, cookies };
++  }
++  return {
++    handlers,
++    start,
++    transactions,
++    sessions,
++    user,
++    advance: () => {
++      now += 601;
++    },
++    failPersist: () => {
++      failPersist = true;
++    },
++    calls: () => providerCalls,
++  };
++}
++
++test("start uses supplied callback, S256 and allowlisted secure cookies on its returned response", async () => {
++  const f = fixture();
++  const { response, location } = await f.start();
++  assert.equal(location.origin, "https://oauth.yandex.ru");
++  assert.equal(
++    location.searchParams.get("redirect_uri"),
++    `https://${host}${callbackPath}`
++  );
++  assert.equal(location.searchParams.get("code_challenge_method"), "S256");
++  assert.equal(location.searchParams.has("scope"), false);
++  assert.equal(location.searchParams.has("optional_scope"), false);
++  assert.ok(location.searchParams.get("state")!.length >= 43);
++  assert.equal(
++    f.transactions.has(hash(location.searchParams.get("state")!)),
++    true
++  );
++  assert.equal(response.cookies.getAll().length, 2);
++  assert.equal(
++    location.searchParams.get("code_challenge"),
++    createHash("sha256")
++      .update(response.cookies.get("__Host-vibecraft-oauth-verifier")!.value)
++      .digest("base64url")
++  );
++  for (const cookie of response.cookies.getAll()) {
++    assert.match(cookie.name, /^__Host-vibecraft-oauth-(state|verifier)$/);
++    assert.equal(cookie.secure, true);
++    assert.equal(cookie.httpOnly, true);
++    assert.equal(cookie.sameSite, "lax");
++    assert.equal(cookie.path, "/");
++    assert.equal(cookie.domain, undefined);
++  }
++  const another = await f.start();
++  assert.notEqual(
++    location.searchParams.get("state"),
++    another.location.searchParams.get("state")
++  );
++});
++
++test("persistence failure and invalid origin never set OAuth cookies", async () => {
++  const f = fixture();
++  f.failPersist();
++  const response = await f.handlers.start(request("/start"));
++  assert.equal(response.status, 503);
++  assert.equal(response.headers.has("set-cookie"), false);
++  const invalid = await f.handlers.start(
++    request("/start", { "x-forwarded-host": "localhost" })
++  );
++  assert.equal(invalid.status, 503);
++  assert.equal(invalid.headers.has("set-cookie"), false);
++});
++
++test("successful callback uses OAuth profile header, clean redirect, opaque session and consumes once", async () => {
++  const f = fixture();
++  const { location, cookies } = await f.start();
++  const url = `${callbackPath}?state=${location.searchParams.get("state")}&code=fake-code`;
++  const response = await f.handlers.callback(request(url, { cookie: cookies }));
++  assert.equal(response.status, 302);
++  assert.equal(response.headers.get("location"), `https://${host}/`);
++  assert.equal(response.cookies.get("__Host-vibecraft-oauth-state")?.maxAge, 0);
++  assert.equal(
++    response.cookies.get("__Host-vibecraft-oauth-verifier")?.maxAge,
++    0
++  );
++  const session = response.cookies.get("__Host-vibecraft-session")!;
++  assert.ok(session.value.length >= 43);
++  assert.ok(f.sessions.has(hash(session.value)));
++  const me = await f.handlers.session(
++    request("/session", { cookie: `${session.name}=${session.value}` })
++  );
++  assert.deepEqual(await me.json(), { user: f.user });
++  const replay = await f.handlers.callback(request(url, { cookie: cookies }));
++  assert.equal(replay.cookies.has("__Host-vibecraft-session"), false);
++  assert.equal(f.calls(), 2);
++});
++
++for (const variant of [
++  "missing",
++  "duplicate",
++  "mismatch",
++  "expired",
++  "wrong-origin",
++  "bad-origin",
++  "denied",
++  "mixed",
++  "missing-code",
++  "duplicate-code",
++  "missing-verifier",
++]) {
++  test(`callback rejects ${variant} without provider access and clears transient cookies`, async () => {
++    const f = fixture();
++    const { location, cookies } = await f.start();
++    const params = new URLSearchParams({
++      state: location.searchParams.get("state")!,
++      code: "fake-code",
++    });
++    if (variant === "missing") params.delete("state");
++    if (variant === "duplicate") params.append("state", "other");
++    if (variant === "mismatch") params.set("state", "other");
++    if (variant === "expired") f.advance();
++    if (variant === "denied") {
++      params.delete("code");
++      params.set("error", "access_denied");
++    }
++    if (variant === "mixed") params.set("error", "access_denied");
++    if (variant === "missing-code") params.delete("code");
++    if (variant === "duplicate-code") params.append("code", "other");
++    const cookie =
++      variant === "missing-verifier"
++        ? cookies
++            .split("; ")
++            .filter((c) => !c.startsWith("__Host-vibecraft-oauth-verifier="))
++            .join("; ")
++        : cookies;
++    const response = await f.handlers.callback(
++      request(`${callbackPath}?${params}`, {
++        cookie,
++        "x-forwarded-host":
++          variant === "wrong-origin"
++            ? "other.example.com"
++            : variant === "bad-origin"
++              ? "tunnel"
++              : host,
++      })
++    );
++    assert.equal(f.calls(), 0);
++    assert.equal(response.cookies.has("__Host-vibecraft-session"), false);
++    assert.equal(
++      response.cookies.get("__Host-vibecraft-oauth-state")?.maxAge,
++      0
++    );
++    assert.equal(
++      response.cookies.get("__Host-vibecraft-oauth-verifier")?.maxAge,
++      0
++    );
++    assert.doesNotMatch(
++      response.headers.get("location") ?? "",
++      /code=|state=|localhost|tunnel/
++    );
++  });
++}
++
++test("concurrent callbacks produce at most one session", async () => {
++  const f = fixture();
++  const { location, cookies } = await f.start();
++  const make = () =>
++    request(
++      `${callbackPath}?state=${location.searchParams.get("state")}&code=fake`,
++      { cookie: cookies }
++    );
++  const results = await Promise.all([
++    f.handlers.callback(make()),
++    f.handlers.callback(make()),
++  ]);
++  assert.equal(
++    results.filter((r) => r.cookies.has("__Host-vibecraft-session")).length,
++    1
++  );
++  assert.equal(f.calls(), 2);
++});
++
++test("logout rejects missing or cross-origin Origin before mutation, then revokes session", async () => {
++  const f = fixture();
++  f.sessions.set(hash("fake-session"), f.user);
++  for (const origin of [
++    "",
++    "https://attacker.example.com",
++    `https://${host}/path`,
++    `https://${host}, https://${host}`,
++  ]) {
++    const response = await f.handlers.logout(
++      request(
++        "/logout",
++        { origin, cookie: "__Host-vibecraft-session=fake-session" },
++        "POST"
++      )
++    );
++    assert.equal(response.status, 403);
++    assert.equal(response.headers.has("set-cookie"), false);
++    assert.equal(f.sessions.size, 1);
++  }
++  const response = await f.handlers.logout(
++    request(
++      "/logout",
++      {
++        origin: `https://${host}`,
++        cookie: "__Host-vibecraft-session=fake-session",
++      },
++      "POST"
++    )
++  );
++  assert.equal(response.status, 200);
++  assert.equal(f.sessions.size, 0);
++  assert.equal(response.cookies.get("__Host-vibecraft-session")?.maxAge, 0);
++});
++
++test("anonymous and legacy-cookie requests do not authenticate", async () => {
++  const f = fixture();
++  f.sessions.set(hash("legacy"), f.user);
++  const response = await f.handlers.session(
++    request("/session", { cookie: "session=legacy" })
++  );
++  assert.deepEqual(await response.json(), { user: null });
++  assert.match(response.headers.get("cache-control")!, /no-store/);
++});
++
++test("origin handles supported proxies and rejects malicious hosts", () => {
++  assert.equal(resolveRuntimeOrigin(request("/")), `https://${host}`);
++  assert.equal(
++    resolveRuntimeOrigin(
++      new NextRequest("http://localhost:8080", { headers: { host } })
++    ),
++    `https://${host}`
++  );
++  assert.equal(
++    resolveRuntimeOrigin(new NextRequest("https://deploy.example.com/path")),
++    "https://deploy.example.com"
++  );
++  for (const bad of [
++    "",
++    "localhost",
++    "tunnel",
++    "127.0.0.1",
++    "[::1]",
++    "foo.local",
++    "foo.internal",
++    "app.corp",
++    "app.intranet",
++    "foo..com",
++    "-foo.com",
++    "foo.com:0",
++    "foo.com:99999",
++    "foo.com,bar.com",
++    "foo.com/path",
++    "user@foo.com",
++    "foo.com?x",
++    "foo.com#x",
++    "foo.com\\x",
++  ]) {
++    assert.throws(() =>
++      resolveRuntimeOrigin(request("/", { "x-forwarded-host": bad }))
++    );
++  }
++  assert.throws(() =>
++    resolveRuntimeOrigin(new NextRequest("http://localhost:8080"))
++  );
++});
++
++test("invalid caller values fail before side effects", () => {
++  for (const path of [
++    "https://evil.example.com",
++    "//evil.example.com",
++    "/\\evil.example.com",
++    "/callback?x",
++    "/callback#x",
++  ]) {
++    assert.throws(() =>
++      createAuthHandlers(
++        { callbackPath: path, clientIdEnv: "ID", clientSecretEnv: "SECRET" },
++        {} as AuthStore
++      )
++    );
++  }
++});
++
++for (const response of [
++  Response.json({ error: "fake-sensitive-value" }, { status: 400 }),
++  Response.json({ access_token: "" }),
++  new Response("invalid-json"),
++]) {
++  test("provider failure cannot create a session or disclose its response", async () => {
++    const f = fixture();
++    const { location, cookies } = await f.start();
++    const store: AuthStore = {
++      createTransaction: async () => {},
++      consumeTransaction: async () => {},
++      createSession: async () => {
++        assert.fail("must not create session");
++      },
++      readSession: async () => null,
++      revokeSession: async () => {},
++    };
++    const handlers = createAuthHandlers(
++      { callbackPath, clientIdEnv: "ID", clientSecretEnv: "SECRET" },
++      store,
++      {
++        env: () => ({ ID: "fake", SECRET: "fake" }),
++        fetch: async () => response.clone(),
++      }
++    );
++    const result = await handlers.callback(
++      request(
++        `${callbackPath}?state=${location.searchParams.get("state")}&code=fake`,
++        { cookie: cookies }
++      )
++    );
++    assert.equal(result.cookies.has("__Host-vibecraft-session"), false);
++    assert.doesNotMatch(
++      await result.text(),
++      /fake-sensitive-value|invalid-json/
++    );
++  });
++}
++test("missing credential names are safe and runtime values never become errors", async () => {
++  const handlers = createAuthHandlers(
++    { callbackPath, clientIdEnv: "ID", clientSecretEnv: "SECRET" },
++    {} as AuthStore,
++    { env: () => ({ ID: "fake-private-id" }) }
++  );
++  const result = await handlers.start(request("/start"));
++  assert.deepEqual(await result.json(), {
++    error: "missing environment variable: SECRET",
++  });
++  assert.equal(result.headers.has("set-cookie"), false);
++});
++
++for (const profileResponse of [
++  Response.json({}, { status: 503 }),
++  Response.json({ id: 123 }),
++  new Response("not-json"),
++]) {
++  test("profile-stage failure never creates session or discloses provider data", async () => {
++    const f = fixture();
++    const { location, cookies } = await f.start();
++    const store: AuthStore = {
++      createTransaction: async () => {},
++      consumeTransaction: async () => {},
++      createSession: async () => {
++        assert.fail("must not create session");
++      },
++      readSession: async () => null,
++      revokeSession: async () => {},
++    };
++    let calls = 0;
++    const handlers = createAuthHandlers(
++      { callbackPath, clientIdEnv: "ID", clientSecretEnv: "SECRET" },
++      store,
++      {
++        env: () => ({ ID: "fake", SECRET: "fake" }),
++        fetch: async () =>
++          ++calls === 1
++            ? Response.json({ access_token: "fake" })
++            : profileResponse.clone(),
++      }
++    );
++    const result = await handlers.callback(
++      request(
++        `${callbackPath}?state=${location.searchParams.get("state")}&code=fake`,
++        { cookie: cookies }
++      )
++    );
++    assert.equal(calls, 2);
++    assert.equal(result.cookies.has("__Host-vibecraft-session"), false);
++    assert.equal(result.cookies.get("__Host-vibecraft-oauth-state")?.maxAge, 0);
++  });
++}
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/tests/yandex-store.test.ts.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/tests/yandex-store.test.ts.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..2a50877b1243e3ce1155aa2e7ab164d41f8c0de3
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/tests/yandex-store.test.ts.template
+@@ -0,0 +1,139 @@
++import assert from "node:assert/strict";
++import { test, mock } from "node:test";
++import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
++import {
++  DynamoDBDocumentClient,
++  GetCommand,
++  UpdateCommand,
++  TransactWriteCommand,
++} from "@aws-sdk/lib-dynamodb";
++import { createDynamoAuthStore } from "../lib/auth/dynamodb";
++
++function client() {
++  return DynamoDBDocumentClient.from(
++    new DynamoDBClient({
++      region: "test",
++      credentials: { accessKeyId: "fake", secretAccessKey: "fake" },
++    })
++  );
++}
++test("transaction consume binds expiry, pending state and redirect URI in one conditional write", async () => {
++  const db = client();
++  const send = mock.method(db, "send", async () => ({}));
++  await createDynamoAuthStore(db, "auth").consumeTransaction(
++    "hashed",
++    "https://app.example.com/callback",
++    100
++  );
++  const command = send.mock.calls[0].arguments[0] as UpdateCommand;
++  assert.ok(command instanceof UpdateCommand);
++  assert.equal(
++    command.input.ConditionExpression,
++    "#status = :pending AND expiresAt > :now AND redirectUri = :uri"
++  );
++  assert.equal(
++    command.input.ExpressionAttributeValues?.[":uri"],
++    "https://app.example.com/callback"
++  );
++  assert.equal(
++    command.input.ExpressionAttributeValues?.[":consumed"],
++    "consumed"
++  );
++});
++test("new identity and session are created atomically without persisting raw provider data", async () => {
++  const db = client();
++  const send = mock.method(db, "send", async () => ({}));
++  const user = await createDynamoAuthStore(db, "auth").createSession(
++    { id: "provider-subject", displayName: "Person" },
++    "session-hash",
++    500
++  );
++  const command = send.mock.calls[0].arguments[0] as TransactWriteCommand;
++  assert.ok(command instanceof TransactWriteCommand);
++  assert.equal(command.input.TransactItems?.length, 2);
++  assert.equal(
++    command.input.TransactItems?.[0].Put?.ConditionExpression,
++    "attribute_not_exists(id)"
++  );
++  assert.match(user.id, /^yandex:/);
++  assert.equal(
++    JSON.stringify(command.input).includes("provider-subject"),
++    false
++  );
++});
++test("existing identity keeps its profile and status, and login checks eligibility atomically", async () => {
++  const db = client();
++  let attempts = 0;
++  const send = mock.method(db, "send", async (command: unknown) => {
++    if (command instanceof GetCommand)
++      return {
++        Item: {
++          userId: "existing",
++          displayName: "Existing name",
++          status: "active",
++        },
++      };
++    if (attempts++ === 0)
++      throw Object.assign(Error("collision"), {
++        name: "TransactionCanceledException",
++      });
++    return {};
++  });
++  const user = await createDynamoAuthStore(db, "auth").createSession(
++    { id: "subject", displayName: "New name" },
++    "hash",
++    500
++  );
++  assert.equal(user.displayName, "Existing name");
++  const command = send.mock.calls.at(-1)!.arguments[0] as TransactWriteCommand;
++  assert.equal(
++    command.input.TransactItems?.[0].ConditionCheck?.ConditionExpression,
++    "#status = :active AND userId = :userId"
++  );
++});
++for (const status of ["disabled", "suspended", "unknown"]) {
++  test(`existing ${status} account cannot receive a session`, async () => {
++    const db = client();
++    let writes = 0;
++    mock.method(db, "send", async (command: unknown) => {
++      if (command instanceof GetCommand)
++        return { Item: { userId: "user", displayName: "Person", status } };
++      writes++;
++      throw Object.assign(Error("collision"), {
++        name: "TransactionCanceledException",
++      });
++    });
++    await assert.rejects(
++      createDynamoAuthStore(db, "auth").createSession(
++        { id: "subject", displayName: "Person" },
++        "hash",
++        500
++      )
++    );
++    assert.equal(writes, 1);
++  });
++}
++test("expired session and missing/revoked session return anonymous", async () => {
++  for (const Item of [undefined, { identityKey: "identity", expiresAt: 99 }]) {
++    const db = client();
++    mock.method(db, "send", async () => ({ Item }));
++    assert.equal(
++      await createDynamoAuthStore(db, "auth").readSession("hash", 100),
++      null
++    );
++  }
++});
++test("session lookup also rejects subsequently disabled users", async () => {
++  const db = client();
++  let calls = 0;
++  mock.method(db, "send", async () => ({
++    Item:
++      ++calls === 1
++        ? { identityKey: "identity", expiresAt: 500 }
++        : { userId: "user", displayName: "Person", status: "disabled" },
++  }));
++  assert.equal(
++    await createDynamoAuthStore(db, "auth").readSession("hash", 100),
++    null
++  );
++});
+diff --git a/.opencode/skills/implement_connector_yandex_id/assets/nextjs/tests/yandex-ui.test.ts.template b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/tests/yandex-ui.test.ts.template
+new file mode 100644
+index 0000000000000000000000000000000000000000..9b5d69b57df5899d95e89e14b9efdb9e235c86d0
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/assets/nextjs/tests/yandex-ui.test.ts.template
+@@ -0,0 +1,24 @@
++import assert from "node:assert/strict";
++import { test } from "node:test";
++import { loginLink, loadCurrentUser } from "../lib/auth/client";
++
++test("embedded UI opens an ordinary login anchor in a new tab and never probes session", async () => {
++  assert.deepEqual(loginLink(true), {
++    href: "/api/auth/yandex/start",
++    target: "_blank",
++    rel: "noopener noreferrer",
++  });
++  const user = await loadCurrentUser(true, async () => {
++    assert.fail("iframe must not request session");
++  });
++  assert.equal(user, null);
++});
++test("top-level UI keeps same-tab login and loads only the safe user view", async () => {
++  assert.deepEqual(loginLink(false), { href: "/api/auth/yandex/start" });
++  const user = await loadCurrentUser(false, async () =>
++    Response.json({
++      user: { id: "user", displayName: "Person", extra: "discarded" },
++    })
++  );
++  assert.deepEqual(user, { id: "user", displayName: "Person" });
++});
+diff --git a/.opencode/skills/implement_connector_yandex_id/evals.md b/.opencode/skills/implement_connector_yandex_id/evals.md
+index 250a1cfc24afef96a87901ceb669440eb37f5987..c76c4584c03882b7c4ad7005e03f482fca56478e 100644
+--- a/.opencode/skills/implement_connector_yandex_id/evals.md
++++ b/.opencode/skills/implement_connector_yandex_id/evals.md
+@@ -28,7 +28,7 @@ Run each case in a project that contains the current `implement_connector_yandex
+ | Missing env at runtime                   | One supplied server env value is absent                                                                                                                                     | Runtime error names only `VIBE_YA_ID` or `VIBE_YA_SECRET`; build/check do not need values; UI receives a safe error                                                                                                                                                                                                                                                                  | N1–N5; no value echo, env dump, default env alias, or browser-side validation                                                          |
+ | Provider returns an error                | Callback contains a provider denial/error                                                                                                                                   | Validate state, consume transaction, create no user/session, return a concrete clean redirect response, allow retry; log only a safe stage/code classification                                                                                                                                                                                                                       | N1–N5, N9; no raw provider query/payload reflection or thrown relative redirect                                                        |
+ | Successful token and profile             | Token endpoint returns `token_type=bearer`; mocked user-information endpoint requires its documented provider-specific scheme                                               | Profile request sends exactly `Authorization: OAuth <access_token>`; successful callback returns a concrete clean same-origin redirect carrying `__Host-vibecraft-session`                                                                                                                                                                                                           | N1–N5, N7–N9; no `Bearer`, token query parameter, raw relative `NextResponse.redirect`, `localhost`, or `tunnel`                       |
+-| Missing OAuth test harness               | The project has no test script or OAuth route tests before connector implementation                                                                                         | Establish a runnable focused test command; demonstrate the profile-header, callback-redirect, and response-cookie regressions failing before implementation and passing afterward                                                                                                                                                                                                    | Static lint, typecheck, build, code inspection, or an unexecuted test file cannot satisfy completion                                   |
++| Missing OAuth test harness               | The project has no test script or OAuth route tests before connector implementation                                                                                         | Reuse bundled node:test/tsx tests and add the focused script without a new runner; run after wiring; demonstrate a failing regression before changing bundled behavior                                                                                                                                                                                                               | Static lint, typecheck, build, code inspection, or an unexecuted test file cannot satisfy completion                                   |
+ | OAuth transaction persistence failure    | DynamoDB rejects creation of the short-lived OAuth transaction after origin, state, and PKCE preparation                                                                    | Return an error response with no OAuth `Set-Cookie` headers and no provider redirect; a retry starts a fresh flow only after transaction persistence succeeds                                                                                                                                                                                                                        | No browser state/verifier cookie may exist without its corresponding server-side transaction                                           |
+ | CDE tunnel runtime                       | `request.url=http://localhost:8080/api/auth/yandex/start`; `Host=tunnel`; `X-Forwarded-Host=preview.example`; `X-Forwarded-Proto=http`                                      | Authorization uses exactly `https://preview.example/api/oauth/yandex/callback-v2`; start, callback, logout, and clean redirect resolve the same origin                                                                                                                                                                                                                               | N1–N5, N7, N9; internal HTTP does not downgrade the public scheme; neither `localhost:8080` nor `tunnel` appears in any redirect       |
+ | Serverless Container runtime             | `request.url=http://localhost:8080/api/auth/yandex/start`; public container FQDN is present in singleton `X-Forwarded-Host` and `Host`; `X-Forwarded-Proto=http`            | Authorization uses exactly the HTTPS container origin plus the supplied callback path; transaction stores and callback verifies the same URI                                                                                                                                                                                                                                         | N1–N5; no connector-specific origin env variable or hardcoded deployment domain                                                        |
+@@ -78,3 +78,11 @@ The browser-agent inline fallback may be shorter than this skill, but it passes
+ 7. disconnect works without secrets and preserves unrelated users, sessions, data, and custom changes.
+ 
+ Mark the fallback case failed if any invariant is absent, if connector cookies are not attached to the exact returned response, or if no focused OAuth test command was executed, even when lint, typecheck, and build pass.
++
++## Reusable asset evaluations
++
++- Fresh auth with `/api/oauth/yandex/callback-v2` and `VIBE_YA_ID` / `VIBE_YA_SECRET`: materialize the supplied files, mount the exact callback, merge schema/script, use no credential values, and run the focused tests. No new test runner or regenerated OAuth core.
++- Existing `lib/auth` / routes / users: inspect conflicts before copying, preserve existing files and eligibility/linking policy, adapt `AuthStore`, and run product-specific regressions. A blind recursive overwrite fails.
++- Existing test harness: preserve its commands; reuse/adapt bundled assertions without adding a competing framework.
++- Caller permits focused tests but limits final lint/build: run focused tests during integration and lint/build at the end. An explicit higher-priority prohibition of focused tests is a reported verification blocker, never an untested success.
++- Maintainer verification: `node .opencode/skills/implement_connector_yandex_id/scripts/verify-assets.mjs` passes on the current template; `--build` also compiles the materialized routes/UI. Template assets themselves remain non-executable until copied.
+diff --git a/.opencode/skills/implement_connector_yandex_id/integration.md b/.opencode/skills/implement_connector_yandex_id/integration.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..856965e87319fe6449d6c5ce77060097686166ef
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/integration.md
+@@ -0,0 +1,62 @@
++# Next.js asset integration
++
++The `.template` suffix keeps unconfigured assets out of the template's TypeScript build and executable routes. Copy only files needed for the current connector task; remove that suffix at the destination. Read/compare existing destinations first. Do not bulk copy over existing auth, schema, components, package metadata, or tests.
++
++## Destination map
++
++| Asset under `assets/nextjs/`                         | Application destination                                                                                                   |
++| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
++| `lib/auth/{core,dynamodb,client,server}.ts.template` | Same path without `.template`                                                                                             |
++| `routes/start.ts.template`                           | `app/api/auth/yandex/start/route.ts`                                                                                      |
++| `routes/callback.ts.template`                        | `app<caller callback path>/route.ts` (e.g. `/api/oauth/yandex/callback-v2` → `app/api/oauth/yandex/callback-v2/route.ts`) |
++| `routes/session.ts.template`                         | `app/api/auth/session/route.ts`                                                                                           |
++| `routes/logout.ts.template`                          | `app/api/auth/logout/route.ts`                                                                                            |
++| `components/yandex-login.tsx.template`               | `components/yandex-login.tsx`                                                                                             |
++| `components/ui/skeleton.tsx.template`                | `components/ui/skeleton.tsx`, only if absent; otherwise reuse the existing component                                      |
++| `tests/*.test.ts.template`                           | `tests/`, same filenames without `.template`                                                                              |
++
++The server wrapper imports `server-only`; Next.js enforces this boundary. UI imports only `lib/auth/client`, never the server/core/store modules. The asset tests exercise core directly with fake injected dependencies; no credentials, running provider, browser, or database is required.
++
++## Four substitutions
++
++In the copied `lib/auth/server.ts`, replace exactly:
++
++- `__CALLBACK_PATH__` with the caller-supplied path;
++- `__CLIENT_ID_ENV__` and `__CLIENT_SECRET_ENV__` with supplied environment-variable names, never values;
++- `__AUTH_TABLE_NAME__` with the provisioned table name below.
++
++Keep the reusable tests' fake callback/env names independent of the application wiring. Add a small wiring regression for the actual caller path if adapting route mounting. No placeholder may remain in the runtime wrapper.
++
++## Schema and existing users
++
++For a product without auth, merge an unused table key into `TableName` in `lib/schema.ts`, for example `YANDEX_AUTH: "yandex_auth"`. Merge its schema entry into `TABLE_SCHEMAS`:
++
++```ts
++[TableName.YANDEX_AUTH]: {
++  name: TableName.YANDEX_AUTH,
++  keySchema: [{ AttributeName: "id", KeyType: "HASH" }],
++  attributeDefinitions: [{ AttributeName: "id", AttributeType: "S" }],
++},
++```
++
++Use that same name in the server wrapper. Preserve all existing schema entries. The existing migration reads `TABLE_SCHEMAS`; run `docker compose exec app npm run db:migrate` after integration. No migration-script rewrite is required.
++
++The table contains `oauth#<state hash>`, `identity#yandex:<subject hash>`, and `session#<session hash>` records. Identity and application user share a record in this fresh-auth adapter. The default never discovers/links local users by email. OAuth/session `expiresAt` is enforced on every relevant operation; automatic expired-record cleanup is not assumed. If supported, configure TTL cleanup separately without relying on it for authorization.
++
++When the product already has users or another auth provider, implement/adapt `AuthStore` against those models and test existing roles, suspended/disabled users, identity collisions, atomic writes and session revocation. The ready fresh-auth adapter is not a replacement for the product's linking/status policy.
++
++## Test command and execution
++
++Merge this additional script into `package.json`, preserving existing scripts:
++
++```json
++"test:yandex-auth": "tsx --test tests/yandex-*.test.ts"
++```
++
++No install step is needed in the current template (`tsx` and Node types already exist). Use the project's existing runner instead if it already owns OAuth tests, preserving the assertions and running the adapted suite. A renamed test must still be selected by the actual command.
++
++Run focused tests after copying/wiring, before final lint/build. For changes to the shipped behavior, first add/run a failing regression, then fix and rerun. Typecheck and final build must include the copied files. Do not run the maintainer materializer from a generated application; it assumes the clean template layout.
++
++## UI
++
++Mount `YandexLogin` in existing header/navigation. Keep its safe user view, ordinary login anchor and embedded detection; adapt styling/copy to the existing app. Both embedded and top-level login must look the same. Preserve the health/bridge/toaster and existing routes. Reuse the project's Skeleton loading state; copy the bundled Skeleton only if the project has none. Do not add jsdom/testing-library solely for the included client-policy tests. They test session-request and anchor policies, not React mounting; verify rendered integration according to the project's allowed test workflow.
+diff --git a/.opencode/skills/implement_connector_yandex_id/references/contract.md b/.opencode/skills/implement_connector_yandex_id/references/contract.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..8469dba4e2eb0a4e5ca65c0a89eaa77d47fb9490
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/references/contract.md
+@@ -0,0 +1,196 @@
++---
++name: implement_connector_yandex_id
++description: Use when handling connector=yandex-id with action=connect or action=disconnect.
++---
++
++# Implement Yandex ID Connector
++
++Implement or remove Yandex ID OAuth without changing unrelated product behavior. Follow this contract even when a library offers a shorter default flow.
++
++## Caller contract
++
++The caller context must contain:
++
++```text
++connector id: yandex-id
++connector action: connect | disconnect
++callback path: <same-origin absolute path>
++environment variables:
++  - client_id: <environment variable name>
++  - client_secret: <environment variable name>
++```
++
++Validate the connector id, action, callback path, and both role-to-environment-variable mappings before editing. The callback path and environment-variable names come only from this caller contract; do not replace them with provider-specific defaults.
++
++If a required public input is absent or malformed, stop and report its name. Never ask the user to paste a credential into chat. If a credential value unexpectedly appears in context, do not repeat, use, log, or save it; stop before editing and report that it must be replaced through the protected connector UI.
++
++## Mandatory implementation references
++
++Before editing `connect` behavior, read the current official Markdown documentation for the web Authorization Code flow:
++
++- [Receiving a confirmation code from the redirect URL](https://yandex.ru/dev/id/doc/ru/codes/code-url.md) for the authorization request, callback parameters, PKCE, and token exchange;
++- [Exchanging the token for user information](https://yandex.ru/dev/id/doc/ru/user-information.md) for the profile request and its provider-specific authorization scheme.
++
++[Requesting an OAuth token with a confirmation code](https://yandex.ru/dev/id/doc/ru/codes/code-and-token.md) is an optional overview. Do not use the console-oriented [`screen-code`](https://yandex.ru/dev/id/doc/ru/codes/screen-code.md) or device-oriented [`screen-code-oauth`](https://yandex.ru/dev/id/doc/ru/codes/screen-code-oauth.md) flows for a VibeCraft web application. If the documentation is temporarily unavailable, follow the pinned contract below instead of substituting generic OAuth conventions.
++
++## Security invariants
++
++- Read credentials only from the two server-side environment variables supplied for the `client_id` and `client_secret` roles. Never add a `NEXT_PUBLIC_` equivalent or a real value to source, `.env.docker`, examples, commands, tests, or documentation.
++- Keep the client secret, authorization code, PKCE verifier, provider access/refresh tokens, cookies, and application session identifiers out of browser bundles, HTML, URLs after the callback redirect, client-readable storage, client logs, server logs, traces, screenshots, and test artifacts.
++- Implement the callback as a server-only Next.js Route Handler. It must redirect to a clean same-origin application URL before any page layout renders; the template bridge must never observe OAuth query parameters.
++- Build `redirect_uri` on the server from the trusted VibeCraft runtime origin and the supplied callback path. Resolve that origin with the exact proxy-aware contract below; never accept a caller-supplied absolute URL or derive it from `Origin`/`Forwarded`.
++- Omit both `scope` and `optional_scope` from the authorization request so Yandex uses the permissions selected by the user in the OAuth application settings. Never hardcode, narrow, or broaden those configured permissions in application code.
++- Request the profile from `https://login.yandex.ru/info` with exactly `Authorization: OAuth <access_token>`. Never use `Bearer` or a query parameter for this request. The token endpoint's `"token_type": "bearer"` response does not change the Yandex ID profile endpoint's provider-specific `OAuth` authorization scheme.
++- For the Yandex ID connector's OAuth transaction and application session cookies, use exactly these CDE-allowlisted names for every set, read, and clear operation: `__Host-vibecraft-oauth-state`, `__Host-vibecraft-oauth-verifier`, and `__Host-vibecraft-session`. Never introduce aliases, provider-specific alternatives, or a generic `session` cookie for this connector. Do not rename or otherwise change unrelated cookies owned by existing application features.
++- Keep every Yandex ID connector cookie compliant with the `__Host-` contract: `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, and no `Domain`. Create state, verifier, or session values only after the trusted public runtime origin resolves to HTTPS. Required defensive cleanup may still expire an existing connector cookie when callback validation fails; use the same exact name and attributes plus `Max-Age=0` for every clear operation. An internal HTTP `request.url` behind the trusted CDE ingress does not justify omitting the cookie or weakening `Secure`.
++- Put every connector `Set-Cookie`, including cleanup, on the exact `NextResponse` that the route returns. Read incoming cookies from the request cookie store, but do not mutate a detached cookie store and then construct a different response.
++- Preserve `app/api/health/route.ts`, `BridgeProvider`, `HandshakeListener`, `Toaster`, existing routes, and unrelated DynamoDB/auth/user behavior.
++- Never log request bodies or raw provider responses in auth code. Safe errors may name a missing environment variable or failed stage, never a value. Verify application-level redaction; separately report that inbound callback queries may require redaction in proxy/access-log infrastructure outside this repository.
++
++## `connect` procedure
++
++### 1. Inspect before editing
++
++Identify existing users, sessions, authorization rules, routes, UI entry points, data tables, and tests. Extend the current product instead of replacing it with an authentication demo. Keep routes public unless the product request explicitly requires access control.
++
++### 2. Validate runtime configuration
++
++Create a server-only configuration helper that reads the two supplied environment variables at request time. Reject a missing or empty variable with a safe error that names only the supplied environment variable but never includes its value. Do not make image build or static analysis require runtime credentials.
++
++Validate the supplied callback path before using it: require a string that starts with exactly one `/`, has no query or fragment, and resolves to the same origin when passed to `new URL(callbackPath, runtimeOrigin)`.
++
++Create one server-only `resolveRuntimeOrigin(request)` helper and use it for every connector route. The application runs behind VibeCraft/Yandex Cloud proxies: the framework may expose `request.url` as `http://localhost:8080`, while the proxy supplies the public host. Resolve the origin in this order:
++
++1. If `X-Forwarded-Host` is present, require exactly one valid public host and return `https://<forwarded-host>`.
++2. Otherwise, use `Host` only when it is a valid public host and differs from the host in `request.url`; this is the deploy/custom-domain fallback. Return `https://<host>`.
++3. Otherwise, parse `request.url` and use its normalized origin only when it is already HTTPS.
++4. If none applies, fail closed with the safe error `public origin is not configured`.
++
++For either host header, reject empty or overlong values, whitespace, commas, credentials, path/query/fragment delimiters, malformed ports, `localhost`, loopback addresses, `tunnel`, and other single-label/internal hostnames. Parse the whole value; never split a list or choose its first/last element. If `X-Forwarded-Host` is present but invalid, fail closed instead of falling through to another source. The accepted hostname must be a public FQDN; normalize it with the URL parser before interpolation.
++
++Treat an accepted proxy host as externally HTTPS even when `X-Forwarded-Proto` is `http`: in the supported CDE and Serverless Container paths that header describes the final internal hop after TLS termination. Do not let it downgrade the public origin, and do not scan a comma-separated proto list for a convenient value. `Origin`, `Forwarded`, and client-supplied redirect parameters are never origin sources.
++
++Keep this trust assumption local to the helper and document it in code: it is valid because the VibeCraft/Yandex Cloud ingress overwrites the routing headers before the application. Do not reuse the helper outside that trusted proxy boundary without reevaluating it. Append the validated callback path only after origin resolution, and do all of this before creating state, cookies, or database records. Do not add a connector-specific origin environment variable.
++
++Keep the resolver structurally equivalent to this deliberately small decision tree:
++
++```ts
++const forwardedHost = request.headers.get("x-forwarded-host");
++if (forwardedHost !== null) {
++  const publicHost = parseSinglePublicHost(forwardedHost);
++  if (!publicHost) throw publicOriginError();
++  return `https://${publicHost}`;
++}
++
++const requestUrl = parseCredentialFreeUrl(request.url);
++const directHost = parseSinglePublicHost(request.headers.get("host"));
++if (requestUrl && directHost && directHost !== requestUrl.host.toLowerCase()) {
++  return `https://${directHost}`;
++}
++if (requestUrl?.protocol === "https:") return requestUrl.origin;
++throw publicOriginError();
++```
++
++`parseSinglePublicHost` must implement every rejection rule above, validate normalized DNS labels (not merely rely on `new URL()` accepting the input), reject IP literals, and return the normalized host with an optional valid port. Keep it independently unit-testable. Do not replace this decision tree with generic “trust proxy” middleware defaults.
++
++### 3. Start Authorization Code flow
++
++Add a server route such as `/api/auth/yandex/start` that:
++
++1. resolves and validates the runtime origin with the shared proxy-aware helper, then builds the absolute redirect URI from that origin and the supplied callback path;
++2. creates a cryptographically random, high-entropy `state`;
++3. creates a cryptographically random PKCE `code_verifier` and derives an S256 `code_challenge` with base64url encoding;
++4. creates a short-lived DynamoDB OAuth transaction keyed by a hash of state, storing the validated redirect URI and expiry but no raw state or verifier;
++5. builds the absolute `https://oauth.yandex.ru/authorize` destination with `response_type=code`, client id, the derived redirect URI, state, challenge, and `code_challenge_method=S256`, omitting both `scope` and `optional_scope` so the OAuth application's configured permissions apply;
++6. creates the redirect response and sets `__Host-vibecraft-oauth-state` and `__Host-vibecraft-oauth-verifier` on that exact response with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`, and a narrow lifetime;
++7. writes one structured server-side diagnostic log containing only the connector id and resolved redirect URI, then returns the prepared response.
++
++If transaction persistence fails, return an error response without any OAuth `Set-Cookie` headers. Do not set browser cookies before the server-side transaction exists.
++
++Do not weaken `Secure` cookies for the local HTTP smoke-test origin. Exercise the real login through a trusted HTTPS runtime origin or test the route response directly.
++
++### 4. Handle the supplied callback path
++
++The server-only callback must read state and the PKCE verifier only from `__Host-vibecraft-oauth-state` and `__Host-vibecraft-oauth-verifier`. It must:
++
++1. parse the cardinality of state, authorization code, and provider error parameters without trusting their values;
++2. require exactly one returned state and validate it against the cookie before trusting provider errors or the authorization code;
++3. for missing, duplicated, or mismatched state, clear the transient cookies, reject the callback, and leave any unmatched DynamoDB transaction to expire;
++4. for a matching state, resolve the runtime origin with the same proxy-aware helper and derive the callback URI from the supplied path; if origin resolution fails, clear the transient cookies, reject the callback, and leave the transaction to expire; otherwise conditionally transition only an unexpired `pending` DynamoDB OAuth transaction whose stored redirect URI matches it to `consumed`; reject origin mismatch, expiry, replay, or concurrent-loser callbacks when this transition fails;
++5. after any matched-state origin/consume attempt, clear the state and verifier cookies on every success or error path;
++6. require exactly one of: a single authorization code, or a single provider error; reject missing, duplicated, or mixed code/error parameters before provider access;
++7. reject provider errors without creating a user or session;
++8. exchange the code server-side at `https://oauth.yandex.ru/token` using the documented `application/x-www-form-urlencoded` fields, the server credentials, and `code_verifier`; do not add `redirect_uri`, which is not part of the documented Yandex token request—the authorization request and the validated OAuth transaction own the redirect binding;
++9. validate the token response and request the profile from `https://login.yandex.ru/info` with exactly `Authorization: OAuth <access_token>`, never `Bearer` and never a query parameter;
++10. validate the profile and identify the external identity by provider plus the stable Yandex subject;
++11. create or update the application user/session atomically, then return a clean same-origin redirect response carrying the session cookie.
++
++The clean destination is a relative application path, but `NextResponse.redirect` must receive an absolute URL built from the already validated public runtime origin, for example `NextResponse.redirect(new URL("/", runtimeOrigin), 302)`. Never pass `"/"`, `"/?auth_error=1"`, or another relative string directly to `NextResponse.redirect`, and never use the internal CDE `request.url` as its base. Set or clear cookies on that response object before returning it. If runtime-origin resolution itself fails, either return a safe non-rendering error response or a bare `NextResponse` with a constant relative `Location` header; do not call `NextResponse.redirect` with a relative string.
++
++Do not auto-link an existing local account using email alone. Preserve roles, account status, and unrelated profile data. Deny a new session for disabled, suspended, or otherwise ineligible accounts according to existing authorization rules. If the current product has no verified account-linking policy, keep the Yandex identity distinct and report the limitation.
++
++### 5. Store the application session server-side
++
++Use the template DynamoDB conventions for user, external identity, and session records. Add schema entries, typed model functions, validation, and migrations as needed.
++
++- Generate a new opaque random application session id after successful login.
++- Put only that opaque id in `__Host-vibecraft-session` with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, no `Domain`, and a bounded lifetime. Store only a hash of the id in DynamoDB.
++- Read the application session id only from `__Host-vibecraft-session`, and enforce expiry and revocation on every server-side lookup.
++- Return only the safe application-user view from a current-session endpoint or server loader. Never return provider tokens or the raw provider profile.
++- Discard provider tokens after profile loading when the product does not need later Yandex API calls. If ongoing access is required, keep tokens server-side, minimize their scope, and use an existing approved encryption/key-management facility. Never introduce plaintext token persistence as a fallback.
++
++### 6. Add logout and UI states
++
++Logout must read only `__Host-vibecraft-session`, invalidate the server-side session before clearing that exact cookie, and never fall back to another cookie name. Prefer a state-changing server action or POST route and use the same runtime-origin helper for same-origin validation. Treat the request `Origin` only as a value to compare with the independently resolved runtime origin, never as an origin source. Fail closed before session mutation when runtime-origin resolution fails, the header is malformed/duplicated, or it does not match. If the route permits a missing `Origin`, require an existing equivalent CSRF defense; do not silently treat absence as same-origin.
++
++Add signed-out, loading, and signed-in UI states using existing project components. Preserve the requested product flow and all unrelated pages. Do not expose raw provider fields in the browser.
++
++VibeCraft can render the application inside a cross-origin iframe. Detect this only in client UI with `window.self !== window.top`. While embedded, keep the preview signed out and do not call the current-session endpoint. Render the same login control text, iconography, and styling as in the top-level application, but make its ordinary anchor to the server-side authorization start route open with `target="_blank"` and `rel="noopener noreferrer"`. Use a direct link activated by the user's click, not `window.open`, and never navigate the iframe itself to the provider. OAuth completes in the new top-level tab and the clean callback redirect returns there. Outside an iframe, preserve the normal current-session loading and same-tab login behavior.
++
++### 7. Test and verify
++
++Use the bundled executable regression tests for unchanged asset behavior. Before changing that behavior or a product-specific adapter, add and run a regression test that fails for the change. Use fake credentials and mocked provider responses. If the project has no runnable test command, use the bundled node:test/tsx tests and add the focused script; lint, typecheck, and build do not replace route-level tests. Add focused tests for:
++
++- missing or malformed caller context and runtime env names/values without value disclosure or file changes;
++- CDE origin resolution from a singleton public `X-Forwarded-Host` when `request.url` is localhost, `Host` is `tunnel`, and `X-Forwarded-Proto` is `http`;
++- Serverless Container origin resolution from its public forwarded host, plus the public `Host` fallback used by deploy/custom-domain ingress when the forwarded host is absent;
++- HTTPS `request.url` fallback, derived redirect URI, authorization redirect without `scope` or `optional_scope`, random state, and S256 PKCE;
++- start setting only `__Host-vibecraft-oauth-state` and `__Host-vibecraft-oauth-verifier` with the required attributes; callback reading and clearing those exact cookies on every required path; no legacy, provider-specific, or alias cookie names;
++- malformed, comma-separated, credential-bearing, local, or internal host candidates failing before OAuth side effects at start and clearing transient cookies on callback;
++- an HTTP localhost `request.url` without a valid public proxy host failing closed, while `X-Forwarded-Proto: http` does not downgrade an accepted public host;
++- identical origin and redirect-URI resolution in start, callback, logout, and any same-origin validation;
++- missing, duplicated, mismatched, expired, replayed, origin-mismatched, and concurrently consumed state;
++- provider denial and token/profile failures;
++- the profile request using exactly `Authorization: OAuth <access_token>`, never the token response's `Bearer` scheme and never a query parameter;
++- successful callback, identity creation/linking policy, opaque session creation, and a concrete clean redirect response whose `Location` is either an absolute URL based on the validated public runtime origin or a constant relative header created without `NextResponse.redirect`;
++- every error callback returning a concrete clean response instead of throwing while constructing a relative `NextResponse.redirect`;
++- the start route returning no `Set-Cookie` headers when OAuth transaction persistence fails, and every success/error response carrying its own required cookie mutations;
++- existing-user collision without unsafe email auto-linking and denial for ineligible accounts;
++- current-session anonymous/authenticated responses;
++- successful login setting only `__Host-vibecraft-session`; current-session lookup reading that exact cookie; logout revoking the server session before clearing that exact cookie with matching `__Host-` attributes;
++- embedded and top-level UI behavior: the iframe skips current-session loading and opens the unchanged login link in a new tab with `noopener noreferrer`, while the top-level application keeps normal session loading and same-tab login;
++- logout rejecting unresolved, malformed, missing-without-alternative-CSRF, and cross-origin requests before mutation, then revoking the server session before cookie clearing on success;
++- signed-in and signed-out UI while unrelated product behavior remains intact;
++- absence of OAuth parameters from rendered pages/bridge events and absence of secrets/tokens in logs or browser storage.
++
++Run and record the focused test command, the required DynamoDB migration when schema changes, `npm run check`, and `npm run build` on the host. Do not mark the connector task complete when no executable OAuth tests ran. Do not save a real authenticated Playwright storage state.
++
++## `disconnect` procedure
++
++Disconnect must work after connector secrets have already been deleted. Never read, recreate, or require either credential.
++
++1. Inventory Yandex-owned routes, UI, env reads/validation, runtime-origin integration, identity mapping, provider fields, dependencies, schema, and tests. Treat a proxy-aware origin helper as shared infrastructure when another feature uses it.
++2. Remove Yandex-specific start/callback/profile routes and UI entry points introduced for this connector.
++3. Remove connector-specific logout/session code only when it is not shared by local auth or another provider.
++4. Remove Yandex env validation and reads. Remove a dependency only after proving no remaining import uses it.
++5. Stop reading provider token/identity fields. Remove schema/model fields only when they are exclusively Yandex-owned and removal is nondestructive.
++6. Preserve unrelated users, user data, sessions, roles, account rules, custom UI, and later adjacent changes. Do not delete a DynamoDB table or user records merely because schema provisioning no longer references them.
++7. If ownership is ambiguous after user customization, make the smallest behavior-preserving change and list the retained ambiguity in the execution result.
++8. Add or update tests proving anonymous behavior, absence of Yandex login/broken auth links, and continued operation of unrelated auth and product flows.
++9. Run focused tests, `npm run check`, and `npm run build`. Scan executable code for the callback path, Yandex endpoints, env reads, provider UI, the three exact `__Host-vibecraft-*` names, legacy cookie names, and unused dependencies.
++
++The execution result must summarize behavior changed, verification performed, and any safe follow-up. Never include credentials, codes, tokens, cookies, or session identifiers.
++
++## Framework reference
++
++- [NextResponse redirect](https://nextjs.org/docs/app/api-reference/functions/next-response#redirect)
+diff --git a/.opencode/skills/implement_connector_yandex_id/scripts/verify-assets.mjs b/.opencode/skills/implement_connector_yandex_id/scripts/verify-assets.mjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..c14422a4939f8c9c30f38569247a03d7a45d2187
+--- /dev/null
++++ b/.opencode/skills/implement_connector_yandex_id/scripts/verify-assets.mjs
+@@ -0,0 +1,149 @@
++import {
++  cpSync,
++  mkdtempSync,
++  symlinkSync,
++  readdirSync,
++  renameSync,
++  writeFileSync,
++  readFileSync,
++  mkdirSync,
++  existsSync,
++} from "node:fs";
++import { tmpdir } from "node:os";
++import { join, resolve, dirname } from "node:path";
++import { fileURLToPath } from "node:url";
++import { spawnSync } from "node:child_process";
++import assert from "node:assert/strict";
++
++const skill = resolve(dirname(fileURLToPath(import.meta.url)), "..");
++const root = resolve(skill, "../../..");
++const assets = join(skill, "assets/nextjs");
++assert.ok(
++  existsSync(join(assets, "lib/auth/core.ts.template")),
++  "Ready OAuth implementation must exist"
++);
++const fixture = mkdtempSync(join(tmpdir(), "yandex-assets-"));
++for (const name of [
++  "app",
++  "components",
++  "lib",
++  "tsconfig.json",
++  "next.config.ts",
++  "eslint.config.mjs",
++  "postcss.config.mjs",
++]) {
++  cpSync(join(root, name), join(fixture, name), { recursive: true });
++}
++cpSync(assets, fixture, { recursive: true });
++writeFileSync(
++  join(fixture, "next-env.d.ts"),
++  '/// <reference types="next" />\n/// <reference types="next/image-types/global" />\n'
++);
++function materialize(directory) {
++  for (const item of readdirSync(directory, { withFileTypes: true })) {
++    const source = join(directory, item.name);
++    if (item.isDirectory()) materialize(source);
++    else if (source.endsWith(".template"))
++      renameSync(source, source.slice(0, -9));
++  }
++}
++materialize(fixture);
++symlinkSync(join(root, "node_modules"), join(fixture, "node_modules"), "dir");
++const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
++writeFileSync(
++  join(fixture, "package.json"),
++  JSON.stringify({ ...pkg, type: "module" })
++);
++const serverFile = join(fixture, "lib/auth/server.ts");
++writeFileSync(
++  serverFile,
++  readFileSync(serverFile, "utf8")
++    .replace("__CALLBACK_PATH__", "/api/oauth/yandex/callback-v2")
++    .replace("__CLIENT_ID_ENV__", "VIBE_YA_ID")
++    .replace("__CLIENT_SECRET_ENV__", "VIBE_YA_SECRET")
++    .replace("__AUTH_TABLE_NAME__", "yandex_auth")
++);
++for (const [name, route] of Object.entries({
++  start: "auth/yandex/start",
++  callback: "oauth/yandex/callback-v2",
++  session: "auth/session",
++  logout: "auth/logout",
++})) {
++  const directory = join(fixture, "app/api", route);
++  mkdirSync(directory, { recursive: true });
++  cpSync(join(fixture, "routes", `${name}.ts`), join(directory, "route.ts"));
++}
++// Exercise the documented schema and UI integration in the temporary application.
++const schemaFile = join(fixture, "lib/schema.ts");
++const schema = readFileSync(schemaFile, "utf8");
++assert.ok(
++  schema.includes("export const TableName = {") &&
++    schema.includes(
++      "export const TABLE_SCHEMAS: Record<TableName, TableSchema> = {"
++    ),
++  "Update fixture schema integration for the new template layout"
++);
++writeFileSync(
++  schemaFile,
++  schema
++    .replace(
++      "export const TableName = {",
++      'export const TableName = {\n  YANDEX_AUTH: "yandex_auth",'
++    )
++    .replace(
++      "export const TABLE_SCHEMAS: Record<TableName, TableSchema> = {",
++      'export const TABLE_SCHEMAS: Record<TableName, TableSchema> = {\n  [TableName.YANDEX_AUTH]: { name: TableName.YANDEX_AUTH, keySchema: [{ AttributeName: "id", KeyType: "HASH" }], attributeDefinitions: [{ AttributeName: "id", AttributeType: "S" }] },'
++    )
++);
++const layoutFile = join(fixture, "app/layout.tsx");
++const layout = readFileSync(layoutFile, "utf8");
++assert.ok(
++  layout.includes("<BridgeProvider />"),
++  "Update fixture UI integration for the new template layout"
++);
++writeFileSync(
++  layoutFile,
++  'import { YandexLogin } from "@/components/yandex-login";\n' +
++    layout.replace("<BridgeProvider />", "<BridgeProvider /><YandexLogin />")
++);
++const tests = readdirSync(join(fixture, "tests"))
++  .filter((name) => name.endsWith(".test.ts"))
++  .map((name) => join(fixture, "tests", name));
++const result = spawnSync(
++  process.execPath,
++  ["--import", "tsx", "--test", ...tests],
++  { cwd: fixture, stdio: "inherit" }
++);
++console.log(`Materialized fixture: ${fixture}`);
++if (result.status !== 0) process.exit(result.status ?? 1);
++for (const args of [
++  ["tsc", "--noEmit", "--incremental", "false"],
++  [
++    "eslint",
++    "lib/auth",
++    "components/yandex-login.tsx",
++    "components/ui/skeleton.tsx",
++    "tests",
++    "app/api/auth",
++    "app/api/oauth",
++  ],
++]) {
++  const check = spawnSync(
++    join(root, "node_modules/.bin", args[0]),
++    args.slice(1),
++    { cwd: fixture, stdio: "inherit" }
++  );
++  if (check.status !== 0) process.exit(check.status ?? 1);
++}
++if (process.argv.includes("--build")) {
++  const build = spawnSync(
++    join(root, "node_modules/.bin/next"),
++    ["build", "--webpack"],
++    {
++      cwd: fixture,
++      stdio: "inherit",
++      env: { ...process.env, USE_DATABASE: "false" },
++    }
++  );
++  process.exit(build.status ?? 1);
++}
+diff --git a/.vibecraft/template.json b/.vibecraft/template.json
+index 1587a669681c9a7e2aa097fbdc4b9882051fb58c..ca84e70e9ef3dd12e0bf613e1d500f74b4ccbaf8 100644
+--- a/.vibecraft/template.json
++++ b/.vibecraft/template.json
+@@ -1,3 +1,3 @@
+ {
+-  "version": "1.0.0"
++  "version": "1.0.1"
+ }

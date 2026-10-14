@@ -1,0 +1,29 @@
+export interface SessionUser {
+  id: string;
+  displayName: string;
+}
+export function loginLink(embedded: boolean) {
+  return {
+    href: "/api/auth/yandex/start",
+    ...(embedded ? { target: "_blank", rel: "noopener noreferrer" } : {}),
+  };
+}
+export async function loadCurrentUser(
+  embedded: boolean,
+  request: typeof fetch = fetch
+): Promise<SessionUser | null> {
+  if (embedded) return null;
+  const response = await request("/api/auth/session", {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  if (!response.ok) throw new Error("Session is unavailable");
+  const data = await response.json();
+  if (data.user === null) return null;
+  if (
+    typeof data.user?.id !== "string" ||
+    typeof data.user?.displayName !== "string"
+  )
+    throw new Error("Invalid session response");
+  return { id: data.user.id, displayName: data.user.displayName };
+}

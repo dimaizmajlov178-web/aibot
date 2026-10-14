@@ -1,0 +1,4 @@
+{
+  "scripts": ["typecheck", "build"],
+  "description": "Обновлена политика индексации dev-окружений"
+}

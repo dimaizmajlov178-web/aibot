@@ -1,0 +1,14 @@
+import "server-only";
+import { docClient } from "../db";
+import { createAuthHandlers } from "./core";
+import { createDynamoAuthStore } from "./dynamodb";
+
+// Replace only these public integration values from the caller contract and merged schema.
+export const yandexAuth = createAuthHandlers(
+  {
+    callbackPath: "__CALLBACK_PATH__",
+    clientIdEnv: "__CLIENT_ID_ENV__",
+    clientSecretEnv: "__CLIENT_SECRET_ENV__",
+  },
+  createDynamoAuthStore(docClient, "__AUTH_TABLE_NAME__")
+);
