@@ -1,3 +1,5 @@
+import type { Telegraf } from "telegraf";
+
 interface BotCommandDescriptor {
   name: string;
   description: string;
@@ -87,4 +89,55 @@ export function formatHelp(isAdmin: boolean): string {
     );
   }
   return ["Доступные команды:", "", ...lines].join("\n");
+}
+
+// Команды для меню «Меню» у поля ввода (setMyCommands). Общий список для всех
+// пользователей и дополнительные админ-команды, видимые только админам.
+export const MENU_COMMANDS: readonly BotCommandDescriptor[] = [
+  { name: "start", description: "Приветствие и краткая инструкция" },
+  { name: "help", description: "Список доступных команд" },
+  { name: "connect", description: "Привязать API-ключ брокера" },
+  { name: "disconnect", description: "Отключить брокера и удалить ключ" },
+  { name: "status", description: "Баланс, позиции, P&L за день и всего" },
+  { name: "positions", description: "Открытые и закрытые сделки" },
+  { name: "stats", description: "Винрейт, профит-фактор, просадка" },
+  { name: "pause", description: "Приостановить автоторговлю" },
+  { name: "resume", description: "Возобновить автоторговлю" },
+  { name: "settings", description: "Настройки риска и режима AI" },
+  { name: "learning", description: "Суточный learning-отчёт по сделкам" },
+  { name: "strategy", description: "Версии стратегии и метрики" },
+  { name: "strategy_ab", description: "Запустить A/B тест версии стратегии" },
+];
+
+export const ADMIN_MENU_COMMANDS: readonly BotCommandDescriptor[] = [
+  { name: "admin", description: "Админ-панель: меню команд" },
+  { name: "grant", description: "Выдать подписку: /grant <user_id> [дней]" },
+  { name: "revoke", description: "Отозвать подписку: /revoke <user_id>" },
+  { name: "users", description: "Список пользователей и подписок" },
+  { name: "broadcast", description: "Рассылка всем: /broadcast <текст>" },
+  { name: "global_pause", description: "Глобальная пауза торговли у всех" },
+];
+
+function toTelegramCommand(descriptor: BotCommandDescriptor): {
+  command: string;
+  description: string;
+} {
+  return { command: descriptor.name, description: descriptor.description };
+}
+
+/** Устанавливает меню команд: общий список + админ-команды для ADMIN_TELEGRAM_IDS. */
+export async function setupCommandsMenu(
+  bot: Pick<Telegraf, "telegram">,
+  adminTelegramIds: readonly number[]
+): Promise<void> {
+  const common = MENU_COMMANDS.map(toTelegramCommand);
+  const adminOnly = ADMIN_MENU_COMMANDS.map(toTelegramCommand);
+
+  await bot.telegram.setMyCommands(common);
+
+  for (const adminId of adminTelegramIds) {
+    await bot.telegram.setMyCommands([...common, ...adminOnly], {
+      scope: { type: "chat", chat_id: adminId },
+    });
+  }
 }

@@ -9,6 +9,7 @@ import { defaultLogger } from "../core/logger";
 import { learningModule } from "../learning";
 import { subscriptionsModule } from "../subscriptions";
 import { createBot } from "./bot";
+import { setupCommandsMenu } from "./commands";
 
 const modules = [
   brokerModule,
@@ -38,6 +39,7 @@ async function main(): Promise<void> {
   const bot = createBot(config);
 
   await bot.telegram.getMe();
+  await setupCommandsMenu(bot, config.adminTelegramIds);
   logger.info("бот запущен и подключён к Telegram");
 
   bot.launch().catch((error) => {
