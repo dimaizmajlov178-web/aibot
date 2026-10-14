@@ -6,7 +6,7 @@ import type {
   BrokerRepository,
 } from "../db/broker-repository";
 import type { AuditMeta } from "../core/audit";
-import { createBroker } from "./factory";
+import { createBroker, type CreateBrokerOptions } from "./factory";
 import { parseBrokerApiKey } from "./validation";
 
 function maskApiKey(apiKey: string): string {
@@ -36,6 +36,14 @@ export interface ConnectResult {
 export class BrokerService {
   constructor(private readonly deps: BrokerServiceDeps) {}
 
+  /** Опции создания клиента брокера из конфига окружения. */
+  private brokerOptions(): CreateBrokerOptions {
+    return {
+      baseUrl: this.deps.brokerApiBaseUrl,
+      apiKeyHeader: this.deps.brokerApiKeyHeader,
+    };
+  }
+
   async isConnected(userId: number): Promise<boolean> {
     return (await this.deps.repository.findByUserId(userId)) !== null;
   }
@@ -56,7 +64,11 @@ export class BrokerService {
     }
 
     const apiKey = parseBrokerApiKey(rawApiKey);
-    const broker = createBroker(this.deps.brokerType, apiKey);
+    const broker = createBroker(
+      this.deps.brokerType,
+      apiKey,
+      this.brokerOptions()
+    );
     const account = await broker.testConnection();
 
     const connection: BrokerConnection = {
@@ -97,7 +109,7 @@ export class BrokerService {
       return null;
     }
     const apiKey = this.deps.crypto.decrypt(connection.encryptedApiKey);
-    return createBroker(connection.brokerType, apiKey);
+    return createBroker(connection.brokerType, apiKey, this.brokerOptions());
   }
 
   async disconnectUser(userId: number, meta: AuditMeta = {}): Promise<boolean> {

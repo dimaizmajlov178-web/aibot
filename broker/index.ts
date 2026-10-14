@@ -14,8 +14,20 @@ export type {
   PositionSide,
 } from "./base";
 export { StubBroker } from "./stub";
+export {
+  UpscaleBroker,
+  UpscaleApiError,
+  DEFAULT_UPSCALE_BASE_URL,
+  toFp9,
+  fromFp9,
+} from "./upscale";
+export type {
+  UpscaleBrokerOptions,
+  BrokerMarket,
+  EquityPoint,
+} from "./upscale";
 export { createBroker, isSupportedBrokerType } from "./factory";
-export type { BrokerType } from "./factory";
+export type { BrokerType, CreateBrokerOptions } from "./factory";
 export { BrokerService } from "./service";
 export type { ConnectResult, BrokerServiceDeps } from "./service";
 export { brokerApiKeySchema, parseBrokerApiKey } from "./validation";

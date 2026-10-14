@@ -309,14 +309,33 @@ tasks:
         установить на сервере (git, Docker, Docker Compose), как склонировать
         репозиторий, как создать и заполнить .env, какая команда запускает
         проект, как проверить, что бот работает"
-    summary: 'Перенос через GitHub, загрузка через PowerShell: .env уже в
-      .gitignore — секреты не попадут в репозиторий. 1) Создайте пустой репо на
-      github.com. 2) PowerShell: git init; git add .; git commit -m "init"; git
-      branch -M main; git remote add origin URL; git push -u origin main. 3) ssh
-      user@IP. 4) Установите git и Docker+Compose: curl -fsSL
-      https://get.docker.com | sh. 5) git clone URL && cd repo. 6) cp
-      .env.example .env; заполните TELEGRAM_BOT_TOKEN, DEEPSEEK_API_KEY,
-      ENCRYPTION_KEY (генерация в комментарии .env.example), ADMIN_TELEGRAM_IDS,
-      лимиты риска; BOT_DRY_RUN=false. 7) docker compose up -d --build. 8)
-      Проверка: docker compose ps (все healthy); docker compose logs bot — «бот
-      запущен и подключён к Telegram»; затем /start боту.'
+    summary:
+      'Перенос через GitHub, загрузка через PowerShell: .env уже в .gitignore
+      — секреты не попадут в репозиторий. 1) Создайте пустой репо на github.com.
+      2) PowerShell: git init; git add .; git commit -m "init"; git branch -M
+      main; git remote add origin URL; git push -u origin main. 3) ssh user@IP.
+      4) Установите git и Docker+Compose: curl -fsSL https://get.docker.com |
+      sh. 5) git clone URL && cd repo. 6) cp .env.example .env; заполните
+      TELEGRAM_BOT_TOKEN, DEEPSEEK_API_KEY, ENCRYPTION_KEY (генерация в
+      комментарии .env.example), ADMIN_TELEGRAM_IDS, лимиты риска;
+      BOT_DRY_RUN=false. 7) docker compose up -d --build. 8) Проверка: docker
+      compose ps (все healthy); docker compose logs bot — «бот запущен и
+      подключён к Telegram»; затем /start боту.'
+  - id: task-3730
+    title: "Исправить docker-compose.yml: сервис bot не получает переменные
+      окружения DEEPSEEK_API_KEY, ENCRYPTION_KEY, ADMIN_TEL..."
+    description:
+      "Исправить docker-compose.yml: сервис bot не получает переменные
+      окружения DEEPSEEK_API_KEY, ENCRYPTION_KEY, ADMIN_TELEGRAM_IDS из .env,
+      из-за чего бот зависает при запуске в контейнере (переменные пустые).
+      Нужно добавить в environment сервиса bot проброс этих переменных из .env
+      по аналогии с TELEGRAM_BOT_TOKEN: DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-},
+      ENCRYPTION_KEY=${ENCRYPTION_KEY:-},
+      ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS:-}. Также проверить, что сервис
+      app при необходимости получает те же переменные."
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_resp_01a13adf-e6d8-7537-9377-67551b44f30f_0
+    summary: "В docker-compose.yml в environment сервиса bot добавлен проброс DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}, ENCRYPTION_KEY=${ENCRYPTION_KEY:-}, ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS:-} из .env по аналогии с TELEGRAM_BOT_TOKEN. Сервису app добавлены те же три переменные, так как core/config.ts (Next.js) тоже читает их из окружения. Итоговая реализация — в docker-compose.yml."
