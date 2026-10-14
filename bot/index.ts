@@ -36,8 +36,16 @@ async function main(): Promise<void> {
   }
 
   const bot = createBot(config);
-  await bot.launch();
+
+  await bot.telegram.getMe();
   logger.info("бот запущен и подключён к Telegram");
+
+  bot.launch().catch((error) => {
+    logger.error("[bot] ошибка запуска:", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    process.exit(1);
+  });
 }
 
 main().catch((error) => {
