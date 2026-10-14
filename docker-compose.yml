@@ -27,6 +27,9 @@ services:
     environment:
       - NODE_ENV=development
       - NODE_OPTIONS=${APP_NODE_OPTIONS:---max-old-space-size=1024}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS:-}
     mem_limit: ${APP_MEMORY_LIMIT:-1536m}
     memswap_limit: ${APP_MEMORY_SWAP_LIMIT:-1536m}
     cpus: ${APP_CPU_LIMIT:-1.5}
@@ -68,6 +71,9 @@ services:
       - REDIS_URL=redis://redis:6379
       - BOT_DRY_RUN=${BOT_DRY_RUN:-true}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS:-}
     mem_limit: ${BOT_MEMORY_LIMIT:-768m}
     memswap_limit: ${BOT_MEMORY_SWAP_LIMIT:-768m}
     cpus: ${BOT_CPU_LIMIT:-1}
