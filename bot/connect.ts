@@ -70,18 +70,18 @@ export function registerConnectHandlers(
     await ctx.reply(wasWaiting ? "Привязка отменена." : "Нечего отменять.");
   });
 
-  bot.on("text", async (ctx) => {
+  bot.on("text", async (ctx, next) => {
     const userId = ctx.from?.id;
     if (userId == null) {
-      return;
+      return next();
     }
 
     const text = ctx.message.text.trim();
     if (!text || text.startsWith("/")) {
-      return;
+      return next();
     }
     if (!deps.sessions.isAwaitingKey(userId)) {
-      return;
+      return next();
     }
 
     await performConnect(ctx, userId, text, deps);
