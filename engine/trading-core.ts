@@ -4,7 +4,11 @@ import type { AnalyzeResult, AiAnalysisService } from "../ai/service";
 import type { TradeSignal } from "../ai/schema";
 import type { MarketDataProvider } from "../ai/market-data";
 import { isSymbolAllowed, type TradingSettings } from "./types";
-import { RiskManager, type BrokerSnapshot } from "./risk-manager";
+import {
+  RiskManager,
+  aiModeMultiplier,
+  type BrokerSnapshot,
+} from "./risk-manager";
 import { OrderExecutor } from "./executor";
 import type { LockStore } from "./lock";
 import type { LearningRecorder } from "../learning/types";
@@ -467,7 +471,14 @@ export class TradingCore {
 
     try {
       const price = await this.currentPrice(normSymbol, signal.entryPrice);
-      const notional = price * 1;
+      const effectiveRiskPercent = Math.min(
+        settings.riskPerTradePercent * aiModeMultiplier(settings.aiMode),
+        settings.riskPerTradePercent
+      );
+      const notional = Math.min(
+        (snapshot.account.balance * effectiveRiskPercent) / 100,
+        snapshot.account.availableCash
+      );
       const decision = await this.deps.riskManager.checkOpenTrade(
         userId,
         normSymbol,
