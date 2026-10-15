@@ -11,7 +11,7 @@ import type { LearningRecorder } from "../learning/types";
 import type { AuditService } from "../core/audit";
 import { createRequestId } from "../core/request-id";
 
-export const DEFAULT_DECISION_INTERVAL_MS = 60_000;
+export const DEFAULT_DECISION_INTERVAL_MS = 300_000;
 export const DEFAULT_LOCK_TTL_MS = 30_000;
 /** Пауза перед следующей итерацией после ошибки rate limit брокера (429). */
 export const RATE_LIMIT_BACKOFF_MS = 5_000;
