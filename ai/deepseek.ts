@@ -1,5 +1,11 @@
 import type { AiModelKind } from "./types";
 import { DeepSeekApiError, DeepSeekConfigError, DeepSeekError } from "./errors";
+import type {
+  AiProvider,
+  AiProviderMessage,
+  AiProviderName,
+  AiProviderResult,
+} from "./provider";
 
 export interface DeepSeekConfig {
   apiKey: string;
@@ -10,20 +16,8 @@ export interface DeepSeekConfig {
   jsonMode?: boolean;
 }
 
-export interface DeepSeekMessage {
-  system?: string;
-  user: string;
-}
-
-export interface DeepSeekResult {
-  content: string;
-  reasoningContent: string;
-  model: string;
-  latencyMs: number;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-}
+export type DeepSeekMessage = AiProviderMessage;
+export type DeepSeekResult = AiProviderResult;
 
 interface DeepSeekUsage {
   prompt_tokens?: number;
@@ -56,7 +50,8 @@ export const SYSTEM_PROMPT =
   "Используй только предоставленные данные, не выдумывай отсутствующие значения. " +
   "Решения должны учитывать риск-менеджмент: не рискуй больше ограничения на сделку.";
 
-export class DeepSeekClient {
+export class DeepSeekClient implements AiProvider {
+  readonly name: AiProviderName = "deepseek";
   readonly config: DeepSeekConfig;
 
   constructor(config: DeepSeekConfig) {
@@ -159,6 +154,7 @@ export class DeepSeekClient {
         promptTokens: usage.prompt_tokens ?? 0,
         completionTokens: usage.completion_tokens ?? 0,
         totalTokens: usage.total_tokens ?? 0,
+        provider: this.name,
       };
     } catch (error) {
       if (error instanceof DeepSeekError) {

@@ -36,6 +36,30 @@ export class DeepSeekApiError extends DeepSeekError {
   }
 }
 
+export class OpenRouterError extends AiAnalysisError {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenRouterError";
+  }
+}
+
+export class OpenRouterConfigError extends OpenRouterError {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenRouterConfigError";
+  }
+}
+
+export class OpenRouterApiError extends OpenRouterError {
+  constructor(
+    message: string,
+    readonly status: number
+  ) {
+    super(message);
+    this.name = "OpenRouterApiError";
+  }
+}
+
 export class AiResponseError extends AiAnalysisError {
   constructor(message: string) {
     super(message);

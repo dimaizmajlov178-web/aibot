@@ -18,6 +18,14 @@ export type {
   DeepSeekMessage,
   DeepSeekResult,
 } from "./deepseek";
+export { OpenRouterClient, type OpenRouterConfig } from "./openrouter";
+export type {
+  AiProvider,
+  AiProviderMessage,
+  AiProviderName,
+  AiProviderResult,
+} from "./provider";
+export { isTransientAiError } from "./provider";
 export {
   StubMarketDataProvider,
   DEFAULT_CANDLE_LIMIT,
@@ -50,4 +58,7 @@ export {
   DeepSeekConfigError,
   DeepSeekError,
   InsufficientMarketDataError,
+  OpenRouterApiError,
+  OpenRouterConfigError,
+  OpenRouterError,
 } from "./errors";

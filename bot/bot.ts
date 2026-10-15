@@ -28,6 +28,7 @@ import { defaultLogger } from "../core/logger";
 import { AuditService } from "../core/audit";
 import { SubscriptionService } from "../subscriptions";
 import { DeepSeekClient } from "../ai/deepseek";
+import { OpenRouterClient } from "../ai/openrouter";
 import {
   AiAnalysisService,
   BrokerPortfolioProvider,
@@ -140,6 +141,14 @@ export function createBot(config: BotConfig): Telegraf {
     chatModel: config.deepSeekChatModel,
     reasonerModel: config.deepSeekReasonerModel,
   });
+  // Fallback AI-провайдер OpenRouter. Если OPENROUTER_API_KEY не задан —
+  // работает только DeepSeek, как раньше.
+  const openrouter = config.openRouterApiKey
+    ? new OpenRouterClient({
+        apiKey: config.openRouterApiKey,
+        model: config.openRouterModel,
+      })
+    : undefined;
   const marketData = new StubMarketDataProvider();
   const portfolio = new BrokerPortfolioProvider({
     getBroker: (userId) => service.getBrokerForUser(userId),
@@ -147,6 +156,7 @@ export function createBot(config: BotConfig): Telegraf {
   const ai = new AiAnalysisService({
     marketData,
     deepseek,
+    openrouter,
     portfolio,
     repository: createInMemoryAiDecisionRepository(),
   });

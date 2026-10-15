@@ -2,8 +2,7 @@ version: 1
 tasks:
   - id: task-0613
     title: "Каркас бота: запуск, /start и /help"
-    description:
-      "Создать каркас Telegram-бота: запуск приложения, базовые команды
+    description: "Создать каркас Telegram-бота: запуск приложения, базовые команды
       /start и /help, структура модульного монолита с папками bot/, broker/,
       ai/, engine/, learning/, subscriptions/, admin/, db/, core/. Цель: дать
       первый видимый результат — работающий бот с приветствием и инструкцией."
@@ -14,8 +13,7 @@ tasks:
       - /help показывает список доступных команд
       - "Структура проекта соответствует модульному монолиту: bot/, broker/,
         ai/, engine/, learning/, subscriptions/, admin/, db/, core/"
-    summary:
-      "Реализован каркас Telegram-бота на telegraf (Node.js/TS): запуск одной
+    summary: "Реализован каркас Telegram-бота на telegraf (Node.js/TS): запуск одной
       командой `npm run bot:start`, подключение к Telegram через
       TELEGRAM_BOT_TOKEN (long polling), команды /start (приветствие и
       инструкция) и /help (список команд). Структура модульного монолита
@@ -41,8 +39,7 @@ tasks:
         пользователей
       - До получения реального API брокера работает StubBroker с фейковыми
         данными
-    summary:
-      "Реализованы абстрактный BaseBroker и StubBroker с детерминированными
+    summary: "Реализованы абстрактный BaseBroker и StubBroker с детерминированными
       фейковыми данными (баланс, позиции, закрытые сделки, статистика).
       Пошаговая привязка API-ключа через /connect: ключ валидируется zod, бот
       делает тестовый вызов balance и сообщает результат; команды /status,
@@ -70,8 +67,7 @@ tasks:
         токены)
       - Используются deepseek-chat для быстрых решений и deepseek-reasoner для
         глубокого разбора
-    summary:
-      "Реализован AI-цикл анализа через DeepSeek: сбор OHLCV и индикаторов
+    summary: "Реализован AI-цикл анализа через DeepSeek: сбор OHLCV и индикаторов
       (RSI, MACD, EMA 20/50/200, ATR, объём, CVD, VWAP-отклонение),
       структурированный промт (роль, контекст рынка, история по активу,
       состояние портфеля, строгий JSON). Ответ парсится и валидируется
@@ -83,8 +79,7 @@ tasks:
       db/ai-decision-repository.ts + таблица ai_decisions в DynamoDB."
   - id: task-1623
     title: Торговое ядро и риск-контроль
-    description:
-      "Реализовать торговое ядро и риск-контроль: цикл решений по таймеру
+    description: "Реализовать торговое ядро и риск-контроль: цикл решений по таймеру
       и событиям, исполнение ордеров через broker.execute_order() с обработкой
       ошибок и ретраями, жёсткие правила риск-менеджмента (макс. % на сделку,
       макс. позиций, дневная и общая просадка, лимит сделок в день), проверки
@@ -106,8 +101,7 @@ tasks:
       - /settings позволяет настроить риск на сделку, максимум позиций, список
         символов и режим AI
       - Защита от дублей через Redis-блокировку на символ+направление
-    summary:
-      "Реализовано торговое ядро (engine/trading-core.ts): цикл решений по
+    summary: "Реализовано торговое ядро (engine/trading-core.ts): цикл решений по
       таймеру, событиям закрытия свечи и резкого движения; исполнение ордеров
       через broker.execute_order() с ретраями (engine/executor.ts).
       Риск-менеджмент (engine/risk-manager.ts) блокирует сделки по % на сделку,
@@ -120,8 +114,7 @@ tasks:
       и broker/base.ts."
   - id: task-4237
     title: Самообучение на истории сделок
-    description:
-      "Реализовать самообучение без fine-tuning: сбор датасета из сделок
+    description: "Реализовать самообучение без fine-tuning: сбор датасета из сделок
       со снимками контекста, суточный learning-отчёт через DeepSeek,
       версионирование стратегий с автоматическим расчётом метрик, A/B режим
       сравнения стратегий, анти-оверфит ограничения, откат стратегии админом."
@@ -145,8 +138,7 @@ tasks:
       /strategy_ab; реализация: learning/."
   - id: task-1963
     title: Подписки и админ-панель
-    description:
-      "Реализовать подписки и админ-панель: роли admin/subscriber/guest,
+    description: "Реализовать подписки и админ-панель: роли admin/subscriber/guest,
       таблица users с подпиской, админ-команды /admin, /grant, /revoke, /users,
       /broadcast, /global_pause, проверка активной подписки на каждом защищённом
       хендлере."
@@ -169,8 +161,7 @@ tasks:
       через TradingCore.isGlobalPaused."
   - id: task-0909
     title: Безопасность, шифрование и аудит
-    description:
-      "Реализовать безопасность и аудит: шифрование API-ключей Fernet с
+    description: "Реализовать безопасность и аудит: шифрование API-ключей Fernet с
       ключом из .env, хранение только шифра в БД, аудит всех торговых действий и
       изменений настроек в audit_log, конфигурация только через .env,
       структурированные логи с user_id и request_id."
@@ -246,8 +237,7 @@ tasks:
       — он должен ответить."
   - id: task-0696
     title: "Пошаговая инструкция: перенос на пустой сервер через GitHub"
-    description:
-      "Пользователь спрашивает: «Говори пошагово что делать, у меня есть
+    description: "Пользователь спрашивает: «Говори пошагово что делать, у меня есть
       пустой сервер. Переносить на него будем через гит хаб». Нужно изучить
       конфигурацию проекта (docker-compose, .env.example, команды запуска,
       зависимости) и подготовить пошаговую инструкцию для переноса бота на
@@ -267,8 +257,7 @@ tasks:
         Docker Compose, git), как склонировать репозиторий, как создать и
         заполнить .env, какая команда запускает проект, как проверить, что бот
         работает"
-    summary:
-      "Перенос через GitHub: 1) создайте пустой репо на github.com и залейте
+    summary: "Перенос через GitHub: 1) создайте пустой репо на github.com и залейте
       код: `git remote add origin URL && git push -u origin main` (.env в
       .gitignore — секреты не уедут). 2) `ssh user@IP`. 3) Установите git,
       Docker+Compose (`curl -fsSL https://get.docker.com | sh`) и Node 24 (для
@@ -282,8 +271,7 @@ tasks:
       «бот запущен и подключён к Telegram»; затем напишите боту /start."
   - id: task-2453
     title: "Пошаговая инструкция: загрузка через PowerShell и перенос на сервер"
-    description:
-      "Пользователь уточнил: «на гит хаб будем грузить через повершел с
+    description: "Пользователь уточнил: «на гит хаб будем грузить через повершел с
       рабочего стола». Нужно изучить конфигурацию проекта (docker-compose,
       .env.example, команды запуска, зависимости, .gitignore) и подготовить
       пошаговую инструкцию для переноса бота на пустой сервер через GitHub, где
@@ -309,8 +297,7 @@ tasks:
         установить на сервере (git, Docker, Docker Compose), как склонировать
         репозиторий, как создать и заполнить .env, какая команда запускает
         проект, как проверить, что бот работает"
-    summary:
-      'Перенос через GitHub, загрузка через PowerShell: .env уже в .gitignore
+    summary: 'Перенос через GitHub, загрузка через PowerShell: .env уже в .gitignore
       — секреты не попадут в репозиторий. 1) Создайте пустой репо на github.com.
       2) PowerShell: git init; git add .; git commit -m "init"; git branch -M
       main; git remote add origin URL; git push -u origin main. 3) ssh user@IP.
@@ -324,8 +311,7 @@ tasks:
   - id: task-3730
     title: "Исправить docker-compose.yml: сервис bot не получает переменные
       окружения DEEPSEEK_API_KEY, ENCRYPTION_KEY, ADMIN_TEL..."
-    description:
-      "Исправить docker-compose.yml: сервис bot не получает переменные
+    description: "Исправить docker-compose.yml: сервис bot не получает переменные
       окружения DEEPSEEK_API_KEY, ENCRYPTION_KEY, ADMIN_TELEGRAM_IDS из .env,
       из-за чего бот зависает при запуске в контейнере (переменные пустые).
       Нужно добавить в environment сервиса bot проброс этих переменных из .env
@@ -346,11 +332,9 @@ tasks:
       core/config.ts (Next.js) тоже читает их из окружения. Итоговая реализация
       — в docker-compose.yml.
   - id: task-4075
-    title:
-      "Бот зависает при запуске: после вывода лога «[bot] модули: broker, ai,
+    title: "Бот зависает при запуске: после вывода лога «[bot] модули: broker, ai,
       engine, learning, subscriptions, admin, db» пр..."
-    description:
-      "Бот зависает при запуске: после вывода лога «[bot] модули: broker,
+    description: "Бот зависает при запуске: после вывода лога «[bot] модули: broker,
       ai, engine, learning, subscriptions, admin, db» процесс не доходит до
       bot.launch() и не подключается к Telegram (нет строки «бот запущен и
       подключён к Telegram»). Проблема воспроизводится и в контейнере (docker
@@ -377,8 +361,7 @@ tasks:
       запускается без await с обработкой ошибок через .catch. Основная
       реализация: bot/index.ts."
   - id: task-7487
-    title:
-      Бот подключён к Telegram (лог «бот запущен и подключён к Telegram»), но
+    title: Бот подключён к Telegram (лог «бот запущен и подключён к Telegram»), но
       не отвечает на команду /start. Сообщения дохо...
     description: "Бот подключён к Telegram (лог «бот запущен и подключён к
       Telegram»), но не отвечает на команду /start. Сообщения доходят до
@@ -394,8 +377,7 @@ tasks:
       - Запрос пользователя выполнен полностью
     meta:
       quick_implement_marker: quick_implement:call_38bc1d559e9c4f77a93ef637
-    summary:
-      "Причина: хендлер `bot.on('text')` в bot/connect.ts выходил без вызова
+    summary: "Причина: хендлер `bot.on('text')` в bot/connect.ts выходил без вызова
       `next()` на любом текстовом апдейте, обрывая цепочку middleware, — до
       bot.command('start') дело не доходило, апдейты молча поглощались без логов
       и ошибок. Исправление: в ветках «не наше сообщение» хендлер вызывает
@@ -403,11 +385,9 @@ tasks:
       Telegram API). Основная реализация: bot/connect.ts; middleware и guard
       подписок в bot/bot.ts, bot.launch() (long polling) проверены и корректны."
   - id: task-1263
-    title:
-      Добавить в Telegram-бота меню команд (кнопка «Меню» рядом с полем ввода),
+    title: Добавить в Telegram-бота меню команд (кнопка «Меню» рядом с полем ввода),
       чтобы все команды были в быстром доступе. Н...
-    description:
-      "Добавить в Telegram-бота меню команд (кнопка «Меню» рядом с полем
+    description: "Добавить в Telegram-бота меню команд (кнопка «Меню» рядом с полем
       ввода), чтобы все команды были в быстром доступе. Нужно при запуске бота
       вызвать setMyCommands с полным списком команд: /start, /help, /connect,
       /disconnect, /status, /positions, /stats, /pause, /resume, /settings,
@@ -421,8 +401,7 @@ tasks:
       - Запрос пользователя выполнен полностью
     meta:
       quick_implement_marker: quick_implement:call_e85fb27383d24d54b43dddd1
-    summary:
-      "В бот добавлено меню команд (кнопка «Меню» у поля ввода): при запуске
+    summary: "В бот добавлено меню команд (кнопка «Меню» у поля ввода): при запуске
       бота вызывается setMyCommands с полным списком команд с короткими
       описаниями. Общий список (/start, /help, /connect, /disconnect, /status,
       /positions, /stats, /pause, /resume, /settings, /learning, /strategy,
@@ -646,8 +625,7 @@ tasks:
       - "В summary задачи содержится понятный пользователю ответ: как изменить
         дневную и общую просадку (через какую команду бота / настройку /
         переменную окружения, с точными названиями и примерами)"
-    summary:
-      "Ответ пользователю: дневная и общая просадка меняются через команду
+    summary: "Ответ пользователю: дневная и общая просадка меняются через команду
       бота /settings — /settings daily_drawdown=5 (алиас drawdown) и /settings
       total_drawdown=15; текущие лимиты показывает /settings без аргументов
       (строки «Дневная/Общая просадка (лимит)»). Применение в
@@ -689,8 +667,7 @@ tasks:
   - id: task-5816
     title: "Диагностика: почему бот не открывает позиции и не расходует токены
       DeepSeek"
-    description:
-      "Пользователь сообщает: бот с реальным брокером Upscale работает
+    description: "Пользователь сообщает: бот с реальным брокером Upscale работает
       (отвечает на команды, /status показывает реальный счёт: баланс 9992.58
       USD, ключ привязан), но не открывает позиции. В личном кабинете DeepSeek
       ни один токен не израсходован — значит, бот вообще не обращается к
@@ -845,6 +822,40 @@ tasks:
       хардкоды в .env.example, core/config.ts (фолбэки остаются, явное значение
       из .env имеет приоритет), ai/deepseek.ts (DEFAULT_CHAT_MODEL /
       DEFAULT_REASONER_MODEL), pycore/config.py; features.md синхронизирован.
-      Запросы к https://api.deepseek.com/chat/completions теперь используют новые
-      имена через modelFor(). Обратная совместимость сохранена: если пользователь
-      задал свои модели в .env — используются они."
+      Запросы к https://api.deepseek.com/chat/completions теперь используют
+      новые имена через modelFor(). Обратная совместимость сохранена: если
+      пользователь задал свои модели в .env — используются они."
+  - id: task-6775
+    title: Добавить в бота поддержку OpenRouter как запасного AI-провайдера
+      (fallback), чтобы когда DeepSeek перегружен или недо...
+    description: "Добавить в бота поддержку OpenRouter как запасного AI-провайдера
+      (fallback), чтобы когда DeepSeek перегружен или недоступен (ошибка
+      service_unavailable_error / 429 / таймаут), бот автоматически переключался
+      на OpenRouter и продолжал AI-анализ рынка. Секреты уже сохранены в
+      переменных окружения: OPENROUTER_API_KEY (ключ вида sk-or-...) и
+      OPENROUTER_MODEL (модель по умолчанию, например openai/gpt-4o-mini).
+      Нужно: 1) в ai/deepseek.ts или ai/service.ts добавить клиент OpenRouter
+      (формат OpenAI API, base_url https://openrouter.ai/api/v1, заголовок
+      Authorization: Bearer <OPENROUTER_API_KEY>); 2) реализовать
+      fallback-логику: при ошибке DeepSeek (service_unavailable_error, 429 rate
+      limit, 5xx, таймаут) автоматически использовать OpenRouter с моделью из
+      OPENROUTER_MODEL; 3) логировать, какой провайдер использован для каждого
+      запроса (deepseek/openrouter) в ai_decisions; 4) сохранить обратную
+      совместимость: если OPENROUTER_API_KEY не задан — работает только DeepSeek
+      как раньше; 5) обновить .env.example с новыми переменными
+      OPENROUTER_API_KEY и OPENROUTER_MODEL. Использовать точные имена
+      переменных окружения OPENROUTER_API_KEY и OPENROUTER_MODEL — значения
+      читаются только из process.env в рантайме, не хардкодить ключи."
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_resp_01a13d92-d5e1-7a58-b10d-c6e2445d378e_0
+    summary: "Добавлен fallback AI-провайдер OpenRouter: новый клиент OpenRouterClient
+      (ai/openrouter.ts, OpenAI-совместимый API, base_url https://openrouter.ai/api/v1,
+      модель из OPENROUTER_MODEL) и общий интерфейс AiProvider (ai/provider.ts). В
+      ai/service.ts при ошибках DeepSeek (429/5xx/service_unavailable_error/таймаут)
+      запрос автоматически переключается на OpenRouter, провайдер
+      (deepseek/openrouter) логируется в ai_decisions. Если OPENROUTER_API_KEY не
+      задан — работает только DeepSeek как раньше. Обновлены core/config.ts,
+      bot/bot.ts, .env.example, docker-compose.yml."

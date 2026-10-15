@@ -10,6 +10,10 @@ export interface BotConfig {
   deepSeekBaseUrl: string;
   deepSeekChatModel: string;
   deepSeekReasonerModel: string;
+  /** API-ключ OpenRouter (fallback AI-провайдер), из OPENROUTER_API_KEY. */
+  openRouterApiKey: string;
+  /** Модель OpenRouter по умолчанию, из OPENROUTER_MODEL. */
+  openRouterModel: string;
   /** Telegram-user_id администраторов (из ADMIN_TELEGRAM_IDS). */
   adminTelegramIds: number[];
   /** URL базы данных (из DATABASE_URL, фолбэк DOCUMENT_API_ENDPOINT). */
@@ -98,6 +102,8 @@ export function loadConfig(): BotConfig {
     deepSeekChatModel: process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-flash",
     deepSeekReasonerModel:
       process.env.DEEPSEEK_REASONER_MODEL ?? "deepseek-v4-pro",
+    openRouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
+    openRouterModel: process.env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini",
     adminTelegramIds: parseAdminIds(process.env.ADMIN_TELEGRAM_IDS),
     databaseUrl:
       process.env.DATABASE_URL ?? process.env.DOCUMENT_API_ENDPOINT ?? "",

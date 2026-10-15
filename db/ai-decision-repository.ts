@@ -5,6 +5,7 @@ import { docClient } from "../lib/db";
 import { TableName, IndexName } from "../lib/schema";
 import type { AiModelKind, AnalysisMode, Timeframe } from "../ai/types";
 import type { DeepAnalysis, TradeSignal } from "../ai/schema";
+import type { AiProviderName } from "../ai/provider";
 import type { DeepSeekResult } from "../ai/deepseek";
 
 export interface AiDecisionInput {
@@ -14,6 +15,8 @@ export interface AiDecisionInput {
   mode: AnalysisMode;
   modelKind: AiModelKind;
   model: string;
+  /** Провайдер, обслуживший запрос: deepseek или openrouter. */
+  provider: AiProviderName;
   prompt: string;
   response: string;
   latencyMs: number;
@@ -63,6 +66,7 @@ interface AiDecisionItem {
   mode: AnalysisMode;
   modelKind: AiModelKind;
   model: string;
+  provider?: AiProviderName;
   prompt: string;
   response: string;
   latencyMs: number;
@@ -84,6 +88,7 @@ function toItem(decision: AiDecision): AiDecisionItem {
     mode: decision.mode,
     modelKind: decision.modelKind,
     model: decision.model,
+    provider: decision.provider,
     prompt: decision.prompt,
     response: decision.response,
     latencyMs: decision.latencyMs,
@@ -106,6 +111,7 @@ function fromItem(item: AiDecisionItem): AiDecision {
     mode: item.mode,
     modelKind: item.modelKind,
     model: item.model,
+    provider: item.provider ?? "deepseek",
     prompt: item.prompt,
     response: item.response,
     latencyMs: item.latencyMs,
@@ -184,6 +190,7 @@ export function createAiDecision(
     mode: deps.mode,
     modelKind: deps.modelKind,
     model: deps.model,
+    provider: response.provider,
     prompt: deps.prompt,
     response: response.content,
     latencyMs: response.latencyMs,
