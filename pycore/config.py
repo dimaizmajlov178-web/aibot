@@ -42,8 +42,8 @@ class BotConfig(BaseModel):
     broker_type: str = "stub"
     deep_seek_api_key: str = ""
     deep_seek_base_url: str = "https://api.deepseek.com"
-    deep_seek_chat_model: str = "deepseek-chat"
-    deep_seek_reasoner_model: str = "deepseek-reasoner"
+    deep_seek_chat_model: str = "deepseek-flash"
+    deep_seek_reasoner_model: str = "deepseek-v4-pro"
     admin_telegram_ids: list[int] = Field(default_factory=list)
     database_url: str = ""
     redis_url: str = ""
@@ -67,9 +67,9 @@ class BotConfig(BaseModel):
             deep_seek_base_url=os.getenv(
                 "DEEPSEEK_API_BASE_URL", "https://api.deepseek.com"
             ),
-            deep_seek_chat_model=os.getenv("DEEPSEEK_CHAT_MODEL", "deepseek-chat"),
+            deep_seek_chat_model=os.getenv("DEEPSEEK_CHAT_MODEL", "deepseek-flash"),
             deep_seek_reasoner_model=os.getenv(
-                "DEEPSEEK_REASONER_MODEL", "deepseek-reasoner"
+                "DEEPSEEK_REASONER_MODEL", "deepseek-v4-pro"
             ),
             admin_telegram_ids=_parse_admin_ids(os.getenv("ADMIN_TELEGRAM_IDS")),
             database_url=os.getenv("DATABASE_URL")

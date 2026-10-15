@@ -36,6 +36,7 @@ export function formatConnectResult(
     `Тип: ${result.brokerName}`,
     "Тестовый вызов balance: успешно",
     `Баланс: ${money(result.account.balance)} ${result.account.currency}`,
+    `Эквити: ${money(result.account.equity)} ${result.account.currency}`,
     `Ключ: ${maskApiKey(apiKey)} — хранится только в зашифрованном виде.`,
     "",
     "Смотрю счёт: /status, сделки: /positions, статистику: /stats",
@@ -66,6 +67,7 @@ export function formatAccount(account: BrokerAccount): string {
   return [
     "Счёт",
     `Баланс: ${money(account.balance)} ${account.currency}`,
+    `Эквити: ${money(account.equity)} ${account.currency}`,
     `Свободно: ${money(account.availableCash)} ${account.currency}`,
     `Открытых позиций: ${account.openPositions}`,
     `P&L за день: ${signedMoney(account.dailyPnl)} (${signedPercent(account.dailyPnlPercent)})`,
@@ -75,7 +77,11 @@ export function formatAccount(account: BrokerAccount): string {
 
 function formatPositionLine(position: OpenPosition, currency: string): string {
   const side = position.side === "long" ? "long" : "short";
-  return `${position.symbol} ${side} ${position.quantity} — вход ${money(position.entryPrice)}, сейчас ${money(position.currentPrice)} → ${signedMoney(position.unrealizedPnl)} ${currency}`;
+  const pnl =
+    position.unrealizedPnl === null
+      ? "P&L недоступен"
+      : `${signedMoney(position.unrealizedPnl)} ${currency}`;
+  return `${position.symbol} ${side} ${position.quantity} — вход ${money(position.entryPrice)}, сейчас ${money(position.currentPrice)} → ${pnl}`;
 }
 
 function formatClosedTradeLine(trade: ClosedTrade, currency: string): string {
@@ -87,7 +93,8 @@ function formatClosedTradeLine(trade: ClosedTrade, currency: string): string {
 export function formatPositions(
   open: OpenPosition[],
   closed: ClosedTrade[],
-  currency: string
+  currency: string,
+  totalUnrealizedPnl?: number | null
 ): string {
   const lines: string[] = ["Открытые позиции:"];
   if (open.length === 0) {
@@ -96,6 +103,18 @@ export function formatPositions(
     for (const position of open) {
       lines.push(formatPositionLine(position, currency));
     }
+  }
+
+  const hasUnavailablePnl =
+    open.length > 0 && open.some((position) => position.unrealizedPnl === null);
+  if (
+    hasUnavailablePnl &&
+    totalUnrealizedPnl !== undefined &&
+    totalUnrealizedPnl !== null
+  ) {
+    lines.push(
+      `Нереализованный P&L суммарно: ${signedMoney(totalUnrealizedPnl)} ${currency}`
+    );
   }
 
   lines.push("", "Последние закрытые:");

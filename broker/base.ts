@@ -18,7 +18,8 @@ export interface OpenPosition {
   quantity: number;
   entryPrice: number;
   currentPrice: number;
-  unrealizedPnl: number;
+  /** Нереализованный P&L позиции; null — если брокер не смог его вычислить. */
+  unrealizedPnl: number | null;
   openedAt: string;
 }
 

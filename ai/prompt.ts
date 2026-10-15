@@ -63,8 +63,12 @@ function formatPortfolioContext(portfolio: PortfolioContext): string {
   } else {
     lines.push("Открытые позиции:");
     for (const position of portfolio.positions) {
+      const pnl =
+        position.unrealizedPnl === null
+          ? "недоступен"
+          : money(position.unrealizedPnl);
       lines.push(
-        `  ${position.symbol} ${position.side} qty=${position.quantity} entry=${money(position.entryPrice)} now=${money(position.currentPrice)} P&L=${money(position.unrealizedPnl)}`
+        `  ${position.symbol} ${position.side} qty=${position.quantity} entry=${money(position.entryPrice)} now=${money(position.currentPrice)} P&L=${pnl}`
       );
     }
   }

@@ -187,7 +187,7 @@ export function createBot(config: BotConfig): Telegraf {
     resolveBroker: (userId) => service.getBrokerForUser(userId),
     resolveUserIds: () => service.listUserIds(),
     supportedSymbols: KNOWN_SYMBOLS,
-    decisionIntervalMs: 60_000,
+    decisionIntervalMs: config.decisionIntervalMs,
     isGlobalPaused: () => subscriptions.isGlobalPaused(),
     notifyAdmin: (userId, message) => {
       defaultLogger.warn("уведомление админа", { userId, message });

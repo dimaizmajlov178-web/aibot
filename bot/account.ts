@@ -57,7 +57,16 @@ export function registerAccountHandlers(
         broker.getClosedTrades(5),
         broker.getAccount(),
       ]);
-      await ctx.reply(formatPositions(open, closed, account.currency));
+      // Для Upscale риск-статус даёт суммарный нереализованный P&L:
+      // currentEquity - currentBalance. Используется как фолбэк, когда
+      // рыночный снимок недоступен и P&L отдельных позиций не вычислен.
+      const totalUnrealizedPnl =
+        broker.name === "upscale"
+          ? account.equity - account.balance
+          : undefined;
+      await ctx.reply(
+        formatPositions(open, closed, account.currency, totalUnrealizedPnl)
+      );
     } catch (error) {
       await ctx.reply(`Ошибка запроса сделок: ${toErrorMessage(error)}`);
     }

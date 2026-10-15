@@ -46,8 +46,8 @@ interface DeepSeekResponse {
 }
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
-const DEFAULT_CHAT_MODEL = "deepseek-chat";
-const DEFAULT_REASONER_MODEL = "deepseek-reasoner";
+const DEFAULT_CHAT_MODEL = "deepseek-flash";
+const DEFAULT_REASONER_MODEL = "deepseek-v4-pro";
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 export const SYSTEM_PROMPT =

@@ -28,6 +28,8 @@ export interface BotConfig {
   dailyDrawdownLimit: number;
   /** Дефолтный лимит общей просадки из .env (%). */
   totalDrawdownLimit: number;
+  /** Интервал торгового цикла из .env (мс). */
+  decisionIntervalMs: number;
 }
 
 function parseAdminIds(raw: string | undefined): number[] {
@@ -93,9 +95,9 @@ export function loadConfig(): BotConfig {
     deepSeekApiKey: process.env.DEEPSEEK_API_KEY ?? "",
     deepSeekBaseUrl:
       process.env.DEEPSEEK_API_BASE_URL ?? "https://api.deepseek.com",
-    deepSeekChatModel: process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-chat",
+    deepSeekChatModel: process.env.DEEPSEEK_CHAT_MODEL ?? "deepseek-flash",
     deepSeekReasonerModel:
-      process.env.DEEPSEEK_REASONER_MODEL ?? "deepseek-reasoner",
+      process.env.DEEPSEEK_REASONER_MODEL ?? "deepseek-v4-pro",
     adminTelegramIds: parseAdminIds(process.env.ADMIN_TELEGRAM_IDS),
     databaseUrl:
       process.env.DATABASE_URL ?? process.env.DOCUMENT_API_ENDPOINT ?? "",
@@ -117,6 +119,10 @@ export function loadConfig(): BotConfig {
     totalDrawdownLimit: parseNumber(process.env.TOTAL_DRAWDOWN_LIMIT, 10, {
       min: 0.1,
       max: 100,
+    }),
+    decisionIntervalMs: parseNumber(process.env.DECISION_INTERVAL_MS, 300_000, {
+      min: 5_000,
+      max: 3_600_000,
     }),
   };
 }

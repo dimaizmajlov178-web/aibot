@@ -368,10 +368,15 @@ export class UpscaleBroker extends BaseBroker {
   async getPositions(): Promise<OpenPosition[]> {
     const account = await this.resolveAccount();
     const accountId = this.accountIdOf(account);
-    const [positions, markets] = await Promise.all([
-      this.fetchActivePositions(accountId),
-      this.fetchMarkets(accountId),
-    ]);
+    const positions = await this.fetchActivePositions(accountId);
+    let markets: UpscaleMarket[] = [];
+    try {
+      markets = await this.fetchMarkets(accountId);
+    } catch {
+      // Рыночный снимок недоступен — позиции всё равно показываем,
+      // unrealized P&L для них будет помечен как недоступный.
+      markets = [];
+    }
     return positions.map((position) => this.toOpenPosition(position, markets));
   }
 
@@ -653,6 +658,40 @@ export class UpscaleBroker extends BaseBroker {
     return fromFp9(readString(asRecord(market.state), "indexPrice"));
   }
 
+  /**
+   * Нереализованный P&L позиции. Если API вернул явный pnl — используем его,
+   * иначе считаем по рыночному снимку: (indexPrice - entryPrice) * size для
+   * long и (entryPrice - indexPrice) * size для short. entryPrice берётся из
+   * позиции или из notional/size (без фолбэка на indexPrice). Если данных
+   * недостаточно — возвращаем null (P&L недоступен).
+   */
+  private positionUnrealizedPnl(
+    position: UpscalePosition,
+    market: UpscaleMarket | null
+  ): number | null {
+    if (position.pnl !== undefined) {
+      return fromFp9(position.pnl);
+    }
+    const size = fromFp9(position.size);
+    const indexPrice = fromFp9(
+      readString(asRecord(market?.state), "indexPrice")
+    );
+    if (!(size > 0) || !(indexPrice > 0)) {
+      return null;
+    }
+    const entry = fromFp9(position.entryPrice);
+    const notional = fromFp9(position.notional);
+    const entryPrice = entry > 0 ? entry : notional > 0 ? notional / size : 0;
+    if (!(entryPrice > 0)) {
+      return null;
+    }
+    const diff =
+      this.normalizeDirection(position.direction) === "long"
+        ? indexPrice - entryPrice
+        : entryPrice - indexPrice;
+    return diff * size;
+  }
+
   private toOpenPosition(
     position: UpscalePosition,
     markets: UpscaleMarket[]
@@ -673,7 +712,7 @@ export class UpscaleBroker extends BaseBroker {
       quantity: size,
       entryPrice,
       currentPrice,
-      unrealizedPnl: fromFp9(position.pnl),
+      unrealizedPnl: this.positionUnrealizedPnl(position, market),
       openedAt: toIso(position.openedAt),
     };
   }

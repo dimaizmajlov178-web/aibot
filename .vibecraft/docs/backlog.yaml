@@ -338,4 +338,513 @@ tasks:
       - Запрос пользователя выполнен полностью
     meta:
       quick_implement_marker: quick_implement:call_resp_01a13adf-e6d8-7537-9377-67551b44f30f_0
-    summary: "В docker-compose.yml в environment сервиса bot добавлен проброс DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}, ENCRYPTION_KEY=${ENCRYPTION_KEY:-}, ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS:-} из .env по аналогии с TELEGRAM_BOT_TOKEN. Сервису app добавлены те же три переменные, так как core/config.ts (Next.js) тоже читает их из окружения. Итоговая реализация — в docker-compose.yml."
+    summary: В docker-compose.yml в environment сервиса bot добавлен проброс
+      DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-},
+      ENCRYPTION_KEY=${ENCRYPTION_KEY:-},
+      ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS:-} из .env по аналогии с
+      TELEGRAM_BOT_TOKEN. Сервису app добавлены те же три переменные, так как
+      core/config.ts (Next.js) тоже читает их из окружения. Итоговая реализация
+      — в docker-compose.yml.
+  - id: task-4075
+    title:
+      "Бот зависает при запуске: после вывода лога «[bot] модули: broker, ai,
+      engine, learning, subscriptions, admin, db» пр..."
+    description:
+      "Бот зависает при запуске: после вывода лога «[bot] модули: broker,
+      ai, engine, learning, subscriptions, admin, db» процесс не доходит до
+      bot.launch() и не подключается к Telegram (нет строки «бот запущен и
+      подключён к Telegram»). Проблема воспроизводится и в контейнере (docker
+      compose), и при ручном запуске npx tsx bot/index.ts. Нужно найти причину
+      зависания в createBot (bot/bot.ts) или в инициализации сервисов
+      (DeepSeekClient, TradingCore, LearningService,
+      startDailyLearningScheduler, RiskManager, OrderExecutor и т.д.) и
+      исправить, чтобы бот запускался и подключался к Telegram. Переменные
+      окружения TELEGRAM_BOT_TOKEN, DEEPSEEK_API_KEY, ENCRYPTION_KEY,
+      ADMIN_TELEGRAM_IDS уже пробрасываются в контейнер и заполнены."
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_ef4b28b9cd6b478885d62a99
+    summary: "Причина зависания — не в createBot и не в инициализации сервисов:
+      createBot(bot/bot.ts) отрабатывает полностью. Проблема была в
+      bot/index.ts: `await bot.launch()` при long polling (Telegraf) возвращает
+      промис, который никогда не резолвится (бесконечный цикл getUpdates),
+      поэтому строка «бот запущен и подключён к Telegram» никогда не выводилась
+      и запуск выглядел зависшим. Исправлено: перед запуском polling выполняется
+      `await bot.telegram.getMe()` (подтверждение подключения к Telegram), после
+      чего логируется «бот запущен и подключён к Telegram», а polling
+      запускается без await с обработкой ошибок через .catch. Основная
+      реализация: bot/index.ts."
+  - id: task-7487
+    title:
+      Бот подключён к Telegram (лог «бот запущен и подключён к Telegram»), но
+      не отвечает на команду /start. Сообщения дохо...
+    description: "Бот подключён к Telegram (лог «бот запущен и подключён к
+      Telegram»), но не отвечает на команду /start. Сообщения доходят до
+      Telegram API (getUpdates показывает их), но бот их не обрабатывает: в
+      логах нет записей об обработке апдейтов и нет ошибок. Нужно найти причину
+      в bot/bot.ts (middleware attachRequestContext, обработчики команд,
+      subscription guard, регистрация хендлеров) и исправить, чтобы бот отвечал
+      на /start приветствием START_TEXT. Проверить, что bot.launch() запускает
+      polling корректно и что обработчики реально регистрируются и не
+      блокируются middleware."
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_38bc1d559e9c4f77a93ef637
+    summary:
+      "Причина: хендлер `bot.on('text')` в bot/connect.ts выходил без вызова
+      `next()` на любом текстовом апдейте, обрывая цепочку middleware, — до
+      bot.command('start') дело не доходило, апдейты молча поглощались без логов
+      и ошибок. Исправление: в ветках «не наше сообщение» хендлер вызывает
+      `next()`. /start отвечает START_TEXT (проверено через handleUpdate с моком
+      Telegram API). Основная реализация: bot/connect.ts; middleware и guard
+      подписок в bot/bot.ts, bot.launch() (long polling) проверены и корректны."
+  - id: task-1263
+    title:
+      Добавить в Telegram-бота меню команд (кнопка «Меню» рядом с полем ввода),
+      чтобы все команды были в быстром доступе. Н...
+    description:
+      "Добавить в Telegram-бота меню команд (кнопка «Меню» рядом с полем
+      ввода), чтобы все команды были в быстром доступе. Нужно при запуске бота
+      вызвать setMyCommands с полным списком команд: /start, /help, /connect,
+      /disconnect, /status, /positions, /stats, /pause, /resume, /settings,
+      /learning, /strategy, /strategy_ab, а для админов дополнительно /admin,
+      /grant, /revoke, /users, /broadcast, /global_pause. Команды должны быть с
+      короткими описаниями. Учесть, что админ-команды должны быть видны только
+      админам (можно использовать scope для chat_id админов или просто включить
+      их в общее меню, если проще)."
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_e85fb27383d24d54b43dddd1
+    summary:
+      "В бот добавлено меню команд (кнопка «Меню» у поля ввода): при запуске
+      бота вызывается setMyCommands с полным списком команд с короткими
+      описаниями. Общий список (/start, /help, /connect, /disconnect, /status,
+      /positions, /stats, /pause, /resume, /settings, /learning, /strategy,
+      /strategy_ab) задаётся через scope по умолчанию, админ-команды (/admin,
+      /grant, /revoke, /users, /broadcast, /global_pause) дополнительно
+      устанавливаются через scope chat для каждого ADMIN_TELEGRAM_IDS — они
+      видны только админам. Основная реализация: bot/commands.ts
+      (setupCommandsMenu, MENU_COMMANDS, ADMIN_MENU_COMMANDS) и вызов в
+      bot/index.ts."
+  - id: task-3925
+    title: Подключить реального брокера Upscale вместо заглушки StubBroker.
+      Пользователь прислал полную документацию API Upscale...
+    description: >-
+      Подключить реального брокера Upscale вместо заглушки StubBroker.
+      Пользователь прислал полную документацию API Upscale
+      (https://api.upscale.trade). Нужно реализовать UpscaleBroker на основе
+      абстрактного BaseBroker, чтобы команды /connect, /status, /positions,
+      /stats показывали реальные данные счёта, а торговое ядро
+      открывало/закрывало реальные сделки через API.
+
+
+      Ключевые детали API Upscale:
+
+      - Базовый URL: https://api.upscale.trade
+
+      - Авторизация: заголовок Authorization: Bearer usk_<ключ> (персональный
+      API-ключ с префиксом usk_)
+
+      - Все суммы/цены/плечи — fp9: необработанные целочисленные строки,
+      значение × 10^9 (100 USD = "100000000000", 10x плечо = "10000000000").
+      Читать/писать через BigInt/Decimal, не через float.
+
+      - Ошибки: { statusCode, message, error } где error — стабильный
+      машиночитаемый код (branch по error, не по message). 401 — неавторизован,
+      403 — account_access_denied / api_trading_not_enabled и др., 404 — not
+      found, 409 — idempotency_key_in_flight, 429 — rate limit (Retry-After).
+
+      - Лимиты: 10 req/s и 60 req/min на чтение (GET), столько же на запись
+      (остальное), по ключу.
+
+      - Для запросов на запись (POST/PATCH/DELETE) отправлять заголовок
+      x-idempotency-key (uuid v4); повторный вызов с тем же ключом в течение 1
+      часа воспроизводит сохранённый ответ.
+
+
+      Основные эндпоинты:
+
+      1. GET /accounts/with-risk-status — список счетов со статусом риска
+      (accountId, status, type: demo/real/tournament, apiTrading,
+      accountBalance, initialAccountBalance, currentPhase,
+      riskStatus{currentBalance, currentEquity, dayStartEquity, maxEquity,
+      tradingDays, ...}). Для тестового вызова balance при /connect использовать
+      этот эндпоинт: найти активный счёт с apiTrading=true.
+
+      2. GET /accounts/{accountId}/risk-status — снимок риска: currentBalance,
+      currentEquity, dayStartEquity, maxEquity, tradingDays, consistencyRuleMet,
+      payoutBaselineBalance и др.
+
+      3. GET /accounts/{accountId}/stats — статистика по закрытым позициям:
+      sumPnl, profit, positionsCount, profitablePositionsCount,
+      unprofitablePositionsCount, winratePercent, avgProfit, avgLoss,
+      riskRewardRatio, maxDrawdownPercent, avgPositionHoldTime и др.
+
+      4. GET /accounts/{accountId}/equity-history?timestamp=&duration= — история
+      эквити (массив {timestamp, volume, phaseIndex, phaseStartEquity}).
+
+      5. GET /v2/markets?accountId=... — торгуемые рынки: id, config{baseAsset,
+      ticker, ...}, state{indexPrice, ...}, settings{minLeverage, maxLeverage,
+      fees...}. Для OHLCV/свечей этого эндпоинта нет — рыночные данные для AI
+      можно брать из state.indexPrice и change (1h/4h/24h), либо оставить
+      заглушку для индикаторов.
+
+      6. POST /orders — создание ордера. Тело: { accountId, marketId, type:
+      "market"|"take"|"limit"|"stop"|"stop_market"|"stop_limit"|"trailing_stop",
+      direction: "long"|"short", amount (fp9; для market-ордера на открытие —
+      quote-сумма резерва, для take-ордера на закрытие — base-размер позиции),
+      leverage (fp9, только для ордеров на увеличение), expectedAmount,
+      triggerPrice, positionId (для ордеров на закрытие), stopTriggerPrice,
+      takeTriggerPrice }. Ответ: OrderResponse { id, status:
+      active/executed/canceled..., type, direction, amount, indexPrice,
+      realizedPnl, createdAt, errorCode, ... }.
+
+      7. GET /positions/{accountId}/active — активные позиции: массив
+      PositionResponse { idx (id позиции), market, direction, size, notional,
+      margin, pnl, funding, fee, openedAt, status, ... }.
+
+      8. GET /positions/{accountId}/portfolio/history?limit=&offset= — история
+      позиций: { data: [...], totalCount }.
+
+      9. POST /positions/{accountId}/close-all — закрыть все позиции по рынку
+      (204).
+
+      10. POST /accounts/{accountId}/close-all — отменить все ордера и закрыть
+      все позиции (204).
+
+      11. GET /orders/{accountId}/active — активные ордера.
+
+      12. DELETE /orders/{orderId} — отменить ордер (204).
+
+      13. PATCH /orders/{orderId} — изменить триггерную цену/amount ордера.
+
+      14. GET /orders/{accountId}/{asset}/history — история ордеров по тикеру.
+
+
+      Важные правила торговли:
+
+      - Закрытие позиции — это ордер type: "take" с triggerPrice: "0"
+      (исполняется по рынку), direction = направление позиции, positionId = idx
+      позиции, amount = size позиции (base units). НЕ рыночный ордер в обратную
+      сторону (он откроет вторую позицию).
+
+      - Ответ ордера не содержит id позиции — после открытия нужно GET
+      /positions/{accountId}/active и найти позицию по market+direction.
+
+      - Стоп-лосс и тейк-профит можно прикрепить к ордеру на открытие через
+      stopTriggerPrice и takeTriggerPrice.
+
+      - amount для ордера на увеличение — quote-сумма (резерв из свободного
+      баланса), для ордера на закрытие — base-размер позиции.
+
+
+      Что нужно сделать:
+
+      1. Реализовать UpscaleBroker (broker/upscale.ts или аналогично) на основе
+      BaseBroker: методы getBalance/riskStatus, getPositions,
+      getClosedTrades/stats, executeOrder (открытие market-ордера + чтение
+      позиции), closePosition (take-ордер с triggerPrice "0"),
+      closeAllPositions, getMarkets, getEquityHistory. Все числа конвертировать
+      fp9 <-> human через BigInt. Обрабатывать ошибки API по коду error, ретраи
+      при 429/409, x-idempotency-key для запросов на запись.
+
+      2. Подключить UpscaleBroker в BrokerService (broker/service.ts): выбор
+      брокера по BROKER_TYPE (stub | upscale), передача BROKER_API_BASE_URL и
+      BROKER_API_KEY_HEADER из конфига. Для upscale API-ключ пользователя
+      (usk_...) используется как Bearer-токен.
+
+      3. /connect должен делать тестовый вызов GET /accounts/with-risk-status с
+      ключом пользователя и сообщать результат (найден активный счёт, баланс,
+      эквити).
+
+      4. /status должен показывать реальные баланс, эквити, дневной/общий P&L из
+      risk-status.
+
+      5. /positions должен показывать реальные открытые позиции из
+      /positions/{accountId}/active и последние закрытые из portfolio/history.
+
+      6. /stats должен показывать реальную статистику из
+      /accounts/{accountId}/stats (винрейт, профит-фактор, средний R, макс.
+      просадка).
+
+      7. Торговое ядро (engine/) должно использовать UpscaleBroker для
+      execute_order: открытие через market-ордер, закрытие через take-ордер с
+      triggerPrice "0".
+
+      8. Обновить .env.example: BROKER_TYPE=stub|upscale,
+      BROKER_API_BASE_URL=https://api.upscale.trade,
+      BROKER_API_KEY_HEADER=Authorization. Учесть, что для upscale заголовок
+      авторизации — "Authorization: Bearer <ключ>".
+
+      9. Сохранить обратную совместимость: если BROKER_TYPE=stub или не задан —
+      работает StubBroker как раньше.
+
+      10. Проверить, что конфиг core/config.ts читает BROKER_TYPE,
+      BROKER_API_BASE_URL, BROKER_API_KEY_HEADER и передаёт их в BrokerService.
+
+
+      Документация Upscale была предоставлена пользователем полностью (все
+      эндпоинты выше описаны по ней). Реализовать интеграцию так, чтобы бот
+      работал с реальным API Upscale.
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_cdcc4595a06b44e4a10cf302
+    summary: 'Реализован UpscaleBroker (broker/upscale.ts) на базе BaseBroker:
+      fp9<->human через BigInt, balance/risk-status, positions, closed
+      trades/stats, markets, equity-history, открытие market-ордером и закрытие
+      take-ордером с triggerPrice "0"; ошибки — по коду error, ретраи 429/409,
+      x-idempotency-key. В broker/factory.ts и service.ts выбор по BROKER_TYPE
+      (stub|upscale) с BROKER_API_BASE_URL/BROKER_API_KEY_HEADER; /connect
+      тестирует /accounts/with-risk-status. Обновлён .env.example; StubBroker
+      сохранён.'
+  - id: task-8572
+    title: Как изменить лимит сделок в день
+    description: "Пользователь спрашивает: «Как изменить лимит сделок в день?».
+      Нужно изучить реализацию (engine/risk-manager, engine/settings, команды
+      /settings, core/config, .env.example) и подготовить понятный ответ: где
+      именно настраивается лимит сделок в день, через какую команду бота или
+      переменную окружения, с точными названиями и примерами. Файлы проекта
+      менять нельзя — это readonly-задача. Ответ пользователю записать в summary
+      completed-задачи."
+    status: completed
+    acceptance_criteria:
+      - Задача завершена со статусом completed
+      - "В summary задачи содержится понятный пользователю ответ: как изменить
+        лимит сделок в день (через какую команду бота / настройку / переменную
+        окружения, с точными названиями и примерами)"
+    summary: "Лимит сделок в день меняется командой бота /settings с параметром
+      daily_limit=N (алиас limit=N), диапазон 1–1000, применяется сразу,
+      например /settings daily_limit=25. Значение dailyTradeLimit хранится в
+      настройках пользователя, дефолт 10 (DEFAULT_DAILY_TRADE_LIMIT в
+      engine/settings.ts) и проверяется при открытии сделки в
+      engine/risk-manager.ts. Через .env изменить нельзя — переменной для него
+      нет: в core/config.ts и .env.example задаются только
+      DEFAULT_RISK_PER_TRADE, MAX_POSITIONS, DAILY_DRAWDOWN_LIMIT и
+      TOTAL_DRAWDOWN_LIMIT. Текущий лимит и число сделок сегодня показывает
+      /settings без аргументов."
+  - id: task-7952
+    title: Как изменить дневную и общую просадку
+    description: "Пользователь спрашивает: «А как поменять дневную и общую
+      просадку?». Нужно изучить реализацию (engine/risk-manager,
+      engine/settings, команды /settings, core/config, .env.example) и
+      подготовить понятный ответ: где именно настраиваются дневная
+      (DAILY_DRAWDOWN_LIMIT) и общая (TOTAL_DRAWDOWN_LIMIT) просадка, через
+      какую команду бота или переменную окружения, с точными названиями и
+      примерами. Файлы проекта менять нельзя — это readonly-задача. Ответ
+      пользователю записать в summary completed-задачи."
+    status: completed
+    acceptance_criteria:
+      - Задача завершена со статусом completed
+      - "В summary задачи содержится понятный пользователю ответ: как изменить
+        дневную и общую просадку (через какую команду бота / настройку /
+        переменную окружения, с точными названиями и примерами)"
+    summary:
+      "Ответ пользователю: дневная и общая просадка меняются через команду
+      бота /settings — /settings daily_drawdown=5 (алиас drawdown) и /settings
+      total_drawdown=15; текущие лимиты показывает /settings без аргументов
+      (строки «Дневная/Общая просадка (лимит)»). Применение в
+      engine/risk-manager.ts (превышение дневной → автопауза до следующего дня,
+      общей → автостоп), валидация 0.1–100% в engine/settings.ts. Переменные
+      окружения DAILY_DRAWDOWN_LIMIT (дефолт 3) и TOTAL_DRAWDOWN_LIMIT (дефолт
+      10) из .env (core/config.ts, .env.example) задают только дефолты для новых
+      пользователей и не меняют настройки уже созданных."
+  - id: task-5546
+    title: "Бот падает с ошибкой 429 api_key_rate_limit_exceeded от API Upscale:
+      стек показывает UpscaleBroker.getPositions -> Tr..."
+    description: "Бот падает с ошибкой 429 api_key_rate_limit_exceeded от API
+      Upscale: стек показывает UpscaleBroker.getPositions ->
+      TradingCore.buildSnapshot -> TradingCore.evaluateSymbol ->
+      TradingCore.tick, после чего процесс завершается (Node.js v24.22.0) и бот
+      перестаёт отвечать. Нужно исправить обработку ошибок rate limit (429) и
+      других ошибок брокера в торговом ядре (engine/trading-core.ts) и/или в
+      UpscaleBroker (broker/upscale.ts): при превышении лимита запросов (429 с
+      Retry-After) цикл должен пропускать итерацию или ждать, а не ронять
+      процесс; ошибки брокера не должны приводить к падению всего бота. Также
+      проверить, что смена режима торговли через /settings не роняет бота
+      (обработчик /settings, engine/settings.ts, bot/control.ts) и что обработка
+      настроек корректно работает с реальным брокером Upscale."
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_resp_01a13cd2-62ba-7201-b5d2-d2fd14e72925_0
+    summary: "Исправлено падение бота при 429 от Upscale (ранее ошибка из
+      buildSnapshot уходила в `void this.tick()` и роняла процесс unhandled
+      rejection). В engine/trading-core.ts resolveBroker/getSettings/
+      buildSnapshot обёрнуты в try/catch: ошибки брокера пропускают итерацию,
+      при UpscaleApiError 429 — backoff 5с (maybeRateLimitBackoff); tick() и
+      runForEvent больше никогда не reject, start() страхуется .catch. В
+      broker/upscale.ts ретраи 429/409 ждут max(backoff, Retry-After).
+      /settings: ветка без payload в bot/control.ts обёрнута в try/catch, смена
+      ai_mode (engine/settings.ts) проверена и работает с zod v4. Основная
+      реализация: engine/trading-core.ts, broker/upscale.ts, bot/control.ts."
+  - id: task-5816
+    title: "Диагностика: почему бот не открывает позиции и не расходует токены
+      DeepSeek"
+    description:
+      "Пользователь сообщает: бот с реальным брокером Upscale работает
+      (отвечает на команды, /status показывает реальный счёт: баланс 9992.58
+      USD, ключ привязан), но не открывает позиции. В личном кабинете DeepSeek
+      ни один токен не израсходован — значит, бот вообще не обращается к
+      DeepSeek (AI-анализ не происходит). В логах бота после запуска нет ни
+      одной записи от торгового цикла (ни сигналов AI, ни hold, ни risk_block,
+      ни ошибок) — цикл либо не запускается, либо молча пропускает итерации до
+      вызова DeepSeek. Нужно изучить код запуска торгового цикла (bot/bot.ts,
+      engine/trading-core.ts, engine/executor.ts, ai/service.ts, ai/deepseek.ts,
+      subscriptions/service.ts, admin/commands.ts) и логику, которая может
+      блокировать открытие позиций: подписка/guard, глобальная пауза, пауза
+      пользователя, отсутствие сигналов AI, ошибки DeepSeek, риск-менеджмент,
+      whitelist символов, настройки, resolveUserIds/resolveBroker. Найти точную
+      причину, почему бот не открывает позиции и не расходует токены DeepSeek, и
+      дать пользователю понятный ответ + рекомендацию, что исправить. Файлы
+      проекта менять нельзя — это readonly-задача. Ответ пользователю записать в
+      summary completed-задачи."
+    status: completed
+    acceptance_criteria:
+      - Задача завершена со статусом completed
+      - "В summary задачи содержится понятный пользователю ответ: почему бот не
+        открывает позиции и не расходует токены DeepSeek (какая причина найдена
+        в коде/логах) и что нужно сделать, чтобы бот начал открывать позиции"
+    summary: "Диагноз: (1) позиции не открываются: в engine/trading-core объём
+      notional=price*1 (цена единицы актива) всегда превышает лимит RiskManager
+      balance*risk/100 = 99.9 USD (9992.58, риск 1%), любой сигнал блокируется
+      risk_per_trade_exceeded. (2) токены DeepSeek не тратятся: цикл молча
+      выходит до AI (global_pause/нет брокера/whitelist вне KNOWN_SYMBOLS),
+      ошибки DeepSeek (нет/неверный DEEPSEEK_API_KEY) скрыто превращаются в hold
+      без логов (onEvent пишет лишь error/notify). Исправить:
+      qty=min(maxTradeNotional,availableCash)/price, проверить DEEPSEEK_API_KEY,
+      /settings, /pause, /global_pause."
+  - id: task-4549
+    title: Бот показывает открытые позиции пользователя (из GET
+      /positions/{accountId}/active API Upscale), но не показывает нер...
+    description: "Бот показывает открытые позиции пользователя (из GET
+      /positions/{accountId}/active API Upscale), но не показывает
+      нереализованную прибыль/убыток (P&L) по ним. По документации Upscale
+      нереализованный PnL не входит в ответ /positions/{accountId}/active — его
+      нужно брать из статуса риска (GET /accounts/{accountId}/risk-status:
+      currentEquity минус currentBalance даёт суммарный нереализованный PnL) или
+      из рыночного снимка (GET /v2/markets: state.indexPrice против цены входа
+      позиции). Нужно исправить UpscaleBroker (broker/upscale.ts) и/или
+      форматирование позиций (bot/format.ts, bot/account.ts), чтобы команда
+      /positions показывала нереализованный P&L по каждой открытой позиции: для
+      каждой позиции считать unrealized PnL = (indexPrice - entryPrice) * size
+      для long, (entryPrice - indexPrice) * size для short, где entryPrice можно
+      получить из notional/size позиции, а indexPrice — из рыночного снимка.
+      Если рыночный снимок недоступен — можно показать суммарный P&L из
+      risk-status (currentEquity - currentBalance) или пометить P&L как
+      недоступный, но не показывать пустоту. Сохранить обратную совместимость со
+      StubBroker."
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_resp_01a13d2d-1bf7-7b05-b7df-caa943b7ebd1_0
+    summary: "Команда /positions теперь показывает нереализованный P&L по каждой
+      открытой позиции Upscale. В broker/upscale.ts positionUnrealizedPnl
+      считает P&L = (indexPrice - entryPrice) * size для long и обратное для
+      short (entryPrice из позиции или notional/size, indexPrice из рыночного
+      снимка), getPositions стал устойчив к недоступности снимка. OpenPosition.
+      unrealizedPnl сделан number | null: при отсутствии данных бот пишет «P&L
+      недоступен» (bot/format.ts), а суммарный P&L из risk-status (currentEquity
+      - currentBalance) выводится как фолбэк (bot/account.ts). StubBroker не
+      изменён и сохранил числовой unrealizedPnl; AI-модуль (ai/types.ts,
+      ai/prompt.ts) приведён к nullable типу. Основная реализация:
+      broker/upscale.ts, bot/format.ts, bot/account.ts."
+  - id: task-5648
+    title: "Исправить расчёт размера сделки в торговом ядре
+      (engine/trading-core.ts): сейчас объём сделки считается как notional ..."
+    description: "Исправить расчёт размера сделки в торговом ядре
+      (engine/trading-core.ts): сейчас объём сделки считается как notional =
+      price * 1 (цена единицы актива), из-за чего для BTC это огромная сумма,
+      которая всегда превышает лимит RiskManager balance*risk/100 (например,
+      99.9 USD при балансе 9992.58 и риске 1%), и любой сигнал AI блокируется с
+      ошибкой risk_per_trade_exceeded — бот не может открыть позиции. Нужно
+      считать размер так: qty = min(maxTradeNotional, availableCash) / price,
+      где maxTradeNotional — это лимит из RiskManager (balance * risk / 100),
+      availableCash — свободные средства из снимка счёта, price — текущая цена.
+      То есть объём сделки должен соответствовать лимиту риска, а не цене
+      актива. Проверить, что после исправления бот может открывать позиции в
+      рамках лимита риска (например, при балансе 10000 USD и риске 1% объём
+      сделки ~99.9 USD, а не цена BTC)."
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_resp_01a13d4c-e62b-7cbb-82c0-429586f5401c_0
+    summary: "Исправлен расчёт размера сделки в engine/trading-core.ts: вместо
+      notional = price * 1 (для BTC — огромная сумма) объём теперь считается от
+      лимита риска — перед checkOpenTrade вычисляется notional = min(balance ×
+      effectiveRiskPercent / 100, availableCash), где effectiveRiskPercent
+      учитывает aiModeMultiplier; qty = budget / price сохранён. При балансе
+      10000 USD и риске 1% объём сделки ~99.9 USD, риск_per_trade_exceeded
+      больше не блокирует сигналы. Проверено: npm run typecheck, lint и build
+      проходят."
+  - id: task-4215
+    title: "Исправить расчёт размера сделки в торговом ядре
+      (engine/trading-core.ts): сейчас объём сделки считается как notional ..."
+    description: "Исправить расчёт размера сделки в торговом ядре
+      (engine/trading-core.ts): сейчас объём сделки считается как notional =
+      price * 1 (цена единицы актива), из-за чего для BTC это огромная сумма,
+      которая всегда превышает лимит RiskManager balance*risk/100 (например,
+      99.9 USD при балансе 9992.58 и риске 1%), и любой сигнал AI блокируется с
+      ошибкой risk_per_trade_exceeded — бот не может открыть позиции. Нужно
+      считать размер так: qty = min(maxTradeNotional, availableCash) / price,
+      где maxTradeNotional — это лимит из RiskManager (balance * risk / 100),
+      availableCash — свободные средства из снимка счёта, price — текущая цена.
+      То есть объём сделки должен соответствовать лимиту риска, а не цене
+      актива. Проверить, что после исправления бот может открывать позиции в
+      рамках лимита риска (например, при балансе 10000 USD и риске 1% объём
+      сделки ~99.9 USD, а не цена BTC)."
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_resp_01a13d58-9e50-78de-a022-ab47f31c12a8_0
+    summary: "Исправлен расчёт размера сделки в engine/trading-core.ts: вместо
+      notional = price * 1 (для BTC — огромная сумма, всегда блокировавшая
+      сигнал risk_per_trade_exceeded) объём теперь выводится от лимита риска —
+      maxTradeNotional = balance × effectiveRiskPercent / 100 (с учётом
+      aiModeMultiplier), а qty = min(maxTradeNotional, availableCash) / price.
+      Основная реализация: engine/trading-core.ts (блок открытия позиции,
+      notional перед checkOpenTrade и budget для quantity). Проверено: при
+      балансе 10000 USD и риске 1% объём сделки ~100 USD, а не цена BTC. npm run
+      typecheck, lint и build проходят."
+  - id: task-9891
+    title: "Обновить названия моделей DeepSeek в проекте на актуальные из
+      документации DeepSeek API: вместо устаревших deepseek-c..."
+    description: "Обновить названия моделей DeepSeek в проекте на актуальные из
+      документации DeepSeek API: вместо устаревших deepseek-chat и
+      deepseek-reasoner использовать новые названия deepseek-flash (быстрый
+      режим, аналог deepseek-chat) и deepseek-v4-pro (глубокий разбор, аналог
+      deepseek-reasoner). Документация DeepSeek: «Используйте deepseek-flash в
+      качестве названия модели. Устаревшие названия deepseek-v4-flash и
+      deepseek-v4-flash-vision-exp по-прежнему используются, но соответствующие
+      модели больше не поддерживаются». Нужно обновить: 1) .env.example —
+      DEEPSEEK_CHAT_MODEL=deepseek-flash,
+      DEEPSEEK_REASONER_MODEL=deepseek-v4-pro; 2) core/config.ts — дефолты
+      моделей, если они там заданы; 3) ai/deepseek.ts и ai/service.ts — если
+      названия моделей захардкожены или берутся из конфига, привести к новым; 4)
+      проверить, что запросы к https://api.deepseek.com/chat/completions
+      используют новые имена моделей. Сохранить обратную совместимость: если
+      пользователь явно задал свои модели в .env — использовать их."
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_resp_01a13d62-6a45-7015-b5d5-7293877f1fc2_0
+    summary: "Названия моделей DeepSeek обновлены на актуальные: deepseek-chat →
+      deepseek-flash, deepseek-reasoner → deepseek-v4-pro. Обновлены дефолты и
+      хардкоды в .env.example, core/config.ts (фолбэки остаются, явное значение
+      из .env имеет приоритет), ai/deepseek.ts (DEFAULT_CHAT_MODEL /
+      DEFAULT_REASONER_MODEL), pycore/config.py; features.md синхронизирован.
+      Запросы к https://api.deepseek.com/chat/completions теперь используют новые
+      имена через modelFor(). Обратная совместимость сохранена: если пользователь
+      задал свои модели в .env — используются они."
