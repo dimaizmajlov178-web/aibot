@@ -1,8 +1,9 @@
 import type { BaseBroker, PositionSide } from "../broker/base";
+import { UpscaleApiError } from "../broker";
 import type { AnalyzeResult, AiAnalysisService } from "../ai/service";
 import type { TradeSignal } from "../ai/schema";
 import type { MarketDataProvider } from "../ai/market-data";
-import { isSymbolAllowed } from "./types";
+import { isSymbolAllowed, type TradingSettings } from "./types";
 import { RiskManager, type BrokerSnapshot } from "./risk-manager";
 import { OrderExecutor } from "./executor";
 import type { LockStore } from "./lock";
@@ -12,6 +13,8 @@ import { createRequestId } from "../core/request-id";
 
 export const DEFAULT_DECISION_INTERVAL_MS = 60_000;
 export const DEFAULT_LOCK_TTL_MS = 30_000;
+/** Пауза перед следующей итерацией после ошибки rate limit брокера (429). */
+export const RATE_LIMIT_BACKOFF_MS = 5_000;
 
 export type EngineEventType =
   | "signal"
@@ -92,7 +95,7 @@ export class TradingCore {
     }
     this.running = true;
     this.timer = setInterval(() => {
-      void this.tick();
+      void this.tick().catch((error) => this.onTickFatal(error));
     }, this.decisionIntervalMs);
     this.timer.unref?.();
   }
@@ -106,6 +109,30 @@ export class TradingCore {
     this.running = false;
   }
 
+  /**
+   * Последняя линия защиты: исключение никогда не должно выходить из tick()
+   * в `void this.tick()` (иначе unhandled rejection роняет процесс).
+   */
+  private onTickFatal(error: unknown): void {
+    const requestId = createRequestId();
+    try {
+      this.emit(
+        event(
+          "error",
+          0,
+          "",
+          `Необработанная ошибка торгового цикла: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          { requestId },
+          requestId
+        )
+      );
+    } catch {
+      // Ошибка наблюдателя не должна ронять процесс.
+    }
+  }
+
   /** Полный цикл решений по таймеру для всех пользователей и символов. */
   async tick(): Promise<void> {
     let userIds: number[];
@@ -116,9 +143,41 @@ export class TradingCore {
     }
 
     for (const userId of userIds) {
-      const symbols = await this.symbolsForUser(userId);
+      let symbols: string[];
+      try {
+        symbols = await this.symbolsForUser(userId);
+      } catch (error) {
+        this.emit(
+          event(
+            "error",
+            userId,
+            "",
+            `Ошибка чтения настроек пользователя ${userId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            { source: "timer" },
+            createRequestId()
+          )
+        );
+        continue;
+      }
       for (const symbol of symbols) {
-        await this.evaluateSymbol(userId, symbol, "timer");
+        try {
+          await this.evaluateSymbol(userId, symbol, "timer");
+        } catch (error) {
+          this.emit(
+            event(
+              "error",
+              userId,
+              symbol,
+              `Необработанная ошибка обработки ${symbol}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+              { source: "timer" },
+              createRequestId()
+            )
+          );
+        }
       }
     }
   }
@@ -145,9 +204,24 @@ export class TradingCore {
       return;
     }
     for (const userId of userIds) {
-      const settings = await this.deps.riskManager.getSettings(userId);
-      if (isSymbolAllowed(settings, symbol)) {
-        await this.evaluateSymbol(userId, symbol, source);
+      try {
+        const settings = await this.deps.riskManager.getSettings(userId);
+        if (isSymbolAllowed(settings, symbol)) {
+          await this.evaluateSymbol(userId, symbol, source);
+        }
+      } catch (error) {
+        this.emit(
+          event(
+            "error",
+            userId,
+            symbol,
+            `Необработанная ошибка обработки события ${source}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            { source },
+            createRequestId()
+          )
+        );
       }
     }
   }
@@ -184,18 +258,60 @@ export class TradingCore {
       return events;
     }
 
-    const broker = await this.deps.resolveBroker(userId);
+    let broker: BaseBroker | null;
+    try {
+      broker = await this.deps.resolveBroker(userId);
+    } catch (error) {
+      this.pushError(
+        events,
+        userId,
+        normSymbol,
+        "Ошибка получения клиента брокера",
+        error,
+        requestId
+      );
+      return events;
+    }
 
     if (!broker) {
       return events;
     }
 
-    const settings = await this.deps.riskManager.getSettings(userId);
+    let settings: TradingSettings;
+    try {
+      settings = await this.deps.riskManager.getSettings(userId);
+    } catch (error) {
+      this.pushError(
+        events,
+        userId,
+        normSymbol,
+        "Ошибка чтения настроек торговли",
+        error,
+        requestId
+      );
+      return events;
+    }
     if (!isSymbolAllowed(settings, normSymbol)) {
       return events;
     }
 
-    const snapshot = await this.buildSnapshot(broker);
+    // Ошибки брокера (в т.ч. 429 rate limit) не должны ронять процесс:
+    // пропускаем итерацию и, при rate limit, делаем короткую паузу.
+    let snapshot: BrokerSnapshot;
+    try {
+      snapshot = await this.buildSnapshot(broker);
+    } catch (error) {
+      this.pushError(
+        events,
+        userId,
+        normSymbol,
+        "Ошибка получения состояния счёта (брокер недоступен)",
+        error,
+        requestId
+      );
+      await this.maybeRateLimitBackoff(error);
+      return events;
+    }
     const existing = snapshot.positions.find(
       (position) => position.symbol.toUpperCase() === normSymbol
     );
@@ -215,6 +331,7 @@ export class TradingCore {
         error,
         requestId
       );
+      await this.maybeRateLimitBackoff(error);
       return events;
     }
 
@@ -321,6 +438,7 @@ export class TradingCore {
           error,
           requestId
         );
+        await this.maybeRateLimitBackoff(error);
       } finally {
         await this.deps.lockStore.release(key);
       }
@@ -389,10 +507,11 @@ export class TradingCore {
           },
         });
         if (decision.code === "total_stop") {
+          const currentSnapshot = await this.refreshSnapshot(broker, snapshot);
           const needsNotify =
             await this.deps.riskManager.checkTotalStopNotification(
               userId,
-              await this.buildSnapshot(broker)
+              currentSnapshot
             );
           if (needsNotify) {
             const msg = `🚨 ВНИМАНИЕ: торговля пользователя ${userId} остановлена — превышена общая просадка.`;
@@ -522,6 +641,7 @@ export class TradingCore {
         error,
         requestId
       );
+      await this.maybeRateLimitBackoff(error);
     } finally {
       await this.deps.lockStore.release(key);
     }
@@ -535,6 +655,21 @@ export class TradingCore {
       broker.getPositions(),
     ]);
     return { account, positions };
+  }
+
+  /**
+   * Повторно запрашивает снимок счёта; при ошибке брокера возвращает
+   * предыдущий снимок, чтобы ветка обработки не падала.
+   */
+  private async refreshSnapshot(
+    broker: BaseBroker,
+    fallback: BrokerSnapshot
+  ): Promise<BrokerSnapshot> {
+    try {
+      return await this.buildSnapshot(broker);
+    } catch {
+      return fallback;
+    }
   }
 
   private async currentPrice(
@@ -575,14 +710,32 @@ export class TradingCore {
     );
     this.emit(eventValue);
     events.push(eventValue);
-    void this.deps.audit?.tradeError({
-      userId,
-      actorRole: "system",
-      requestId: requestId ?? null,
-      entityType: "order",
-      entityId: symbol,
-      details: { symbol, error: message },
-    });
+    void this.deps.audit
+      ?.tradeError({
+        userId,
+        actorRole: "system",
+        requestId: requestId ?? null,
+        entityType: "order",
+        entityId: symbol,
+        details: { symbol, error: message },
+      })
+      .catch(() => {
+        // Ошибка аудита не должна влиять на торговый цикл.
+      });
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * При ошибке rate limit брокера (429) делает короткую паузу, чтобы не
+   * долбить API подряд в следующей итерации цикла.
+   */
+  private async maybeRateLimitBackoff(error: unknown): Promise<void> {
+    if (error instanceof UpscaleApiError && error.statusCode === 429) {
+      await this.sleep(RATE_LIMIT_BACKOFF_MS);
+    }
   }
 }
 

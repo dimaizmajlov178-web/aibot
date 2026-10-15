@@ -943,9 +943,12 @@ export class UpscaleBroker extends BaseBroker {
           attempt < this.maxRetries &&
           (error.statusCode === 429 || error.statusCode === 409)
         ) {
-          await this.sleep(
-            this.retryDelayMs * attempt + this.retryAfterMs(response)
+          // Уважаем Retry-After: ждём максимум из бэк-оффа и заголовка.
+          const backoff = Math.max(
+            this.retryDelayMs * attempt,
+            this.retryAfterMs(response)
           );
+          await this.sleep(backoff);
           continue;
         }
         throw error;

@@ -74,11 +74,16 @@ export function registerControlHandlers(
 
     const payload = ctx.payload.trim();
     if (!payload) {
-      const settings = await deps.riskManager.getSettings(userId);
-      const state = await deps.riskManager.getState(userId);
-      await ctx.reply(
-        `${formatSettings(settings)}\n\n${formatTradingState(state, settings)}`
-      );
+      try {
+        const settings = await deps.riskManager.getSettings(userId);
+        const state = await deps.riskManager.getState(userId);
+        await ctx.reply(
+          `${formatSettings(settings)}\n\n${formatTradingState(state, settings)}`
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await ctx.reply(`Ошибка настройки: ${message}`);
+      }
       return;
     }
 
