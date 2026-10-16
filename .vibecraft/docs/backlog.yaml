@@ -1,940 +1,2597 @@
 version: 1
 tasks:
-  - id: task-0613
-    title: "Каркас бота: запуск, /start и /help"
-    description: "Создать каркас Telegram-бота: запуск приложения, базовые команды
-      /start и /help, структура модульного монолита с папками bot/, broker/,
-      ai/, engine/, learning/, subscriptions/, admin/, db/, core/. Цель: дать
-      первый видимый результат — работающий бот с приветствием и инструкцией."
+  - id: task-4558
+    title:
+      После перезапуска бота с реальным брокером Upscale (brokerType=upscale,
+      dryRun=false) в логах до сих пор нет ни одной...
+    description: После перезапуска бота с реальным брокером Upscale
+      (brokerType=upscale, dryRun=false) в логах до сих пор нет ни одной записи
+      от торгового цикла (ни сбора данных и запроса к AI, ни сигналов, ни hold,
+      ни risk_block, ни trade_open, ни ошибок) — только строки запуска. Позиции
+      на брокере не открываются. Нужно найти и исправить причину, по которой
+      торговый цикл не запускается или молча пропускает итерации, чтобы бот
+      начал анализировать рынок через DeepSeek и открывать позиции в рамках
+      лимита риска, а все шаги цикла (старт с интервалом и числом пользователей,
+      сбор данных и запрос к AI, сигнал/hold, risk_block, открытие/закрытие
+      сделок, ошибки и диагностика тихих веток) были видны в логах.
     status: completed
     acceptance_criteria:
-      - Бот запускается одной командой и подключается к Telegram
-      - /start показывает приветствие и краткую инструкцию
-      - /help показывает список доступных команд
-      - "Структура проекта соответствует модульному монолиту: bot/, broker/,
-        ai/, engine/, learning/, subscriptions/, admin/, db/, core/"
-    summary: "Реализован каркас Telegram-бота на telegraf (Node.js/TS): запуск одной
-      командой `npm run bot:start`, подключение к Telegram через
-      TELEGRAM_BOT_TOKEN (long polling), команды /start (приветствие и
-      инструкция) и /help (список команд). Структура модульного монолита
-      создана: bot/, broker/, ai/, engine/, learning/, subscriptions/, admin/,
-      db/, core/. Основная реализация в bot/index.ts, bot/bot.ts,
-      core/config.ts; прочие модули — заглушки на последующие задачи."
-  - id: task-2927
-    title: Привязка брокера и контроль счёта
-    description: "Реализовать привязку брокера и контроль счёта: абстрактный
-      BaseBroker и заглушку StubBroker с фейковыми данными, пошаговую привязку
-      API-ключа через /connect с тестовым вызовом balance, команды /status,
-      /positions, /stats. Ключ шифруется и хранится только в зашифрованном
-      виде."
-    status: completed
-    acceptance_criteria:
-      - Пользователь привязывает API-ключ брокера через /connect, бот делает
-        тестовый вызов balance и сообщает результат
-      - /status показывает баланс, открытые позиции, дневной и общий P&L
-      - /positions показывает открытые и последние закрытые сделки
-      - /stats показывает винрейт, профит-фактор, средний R, максимальную
-        просадку
-      - API-ключ хранится только в зашифрованном виде, админ не видит ключи
-        пользователей
-      - До получения реального API брокера работает StubBroker с фейковыми
-        данными
-    summary: "Реализованы абстрактный BaseBroker и StubBroker с детерминированными
-      фейковыми данными (баланс, позиции, закрытые сделки, статистика).
-      Пошаговая привязка API-ключа через /connect: ключ валидируется zod, бот
-      делает тестовый вызов balance и сообщает результат; команды /status,
-      /positions, /stats показывают счёт, сделки и метрики (винрейт,
-      профит-фактор, средний R, просадка), есть /disconnect и /cancel. Ключ
-      шифруется AES-256-GCM (ENCRYPTION_KEY) и хранится только в зашифрованном
-      виде в db/broker-repository.ts; админ не видит ключи. Основная реализация:
-      broker/ (base.ts, stub.ts, service.ts), core/crypto.ts, bot/ (connect.ts,
-      account.ts, format.ts)."
-  - id: task-0995
-    title: AI-анализ через DeepSeek
-    description: "Реализовать AI-анализ через DeepSeek: сбор рыночных данных и
-      индикаторов, формирование структурированного промта (роль, контекст рынка,
-      история по активу, состояние портфеля, запрос строгого JSON), парсинг
-      ответа с валидацией схемы, логирование каждого запроса и ответа в
-      ai_decisions."
-    status: completed
-    acceptance_criteria:
-      - AI-цикл собирает рыночные данные (OHLCV, RSI, MACD, EMA 20/50/200, ATR,
-        объём, CVD, VWAP-отклонение) и формирует структурированный промт для
-        DeepSeek
-      - "Ответ DeepSeek парсится с валидацией схемы (pydantic), невалидный ответ
-        не приводит к ошибке: повторный запрос или пропуск цикла"
-      - Каждый запрос и ответ логируются в ai_decisions (промт, ответ, latency,
-        токены)
-      - Используются deepseek-chat для быстрых решений и deepseek-reasoner для
-        глубокого разбора
-    summary: "Реализован AI-цикл анализа через DeepSeek: сбор OHLCV и индикаторов
-      (RSI, MACD, EMA 20/50/200, ATR, объём, CVD, VWAP-отклонение),
-      структурированный промт (роль, контекст рынка, история по активу,
-      состояние портфеля, строгий JSON). Ответ парсится и валидируется
-      zod-схемами (аналог pydantic для TS): невалидный ответ не ломает цикл —
-      повторный запрос либо пропуск итерации. Каждый запрос/ответ логируется в
-      ai_decisions (промт, ответ, latency, токены); клиент поддерживает
-      deepseek-chat и deepseek-reasoner. Основная реализация: ai/service.ts,
-      ai/deepseek.ts, ai/indicators.ts, ai/prompt.ts, ai/parser.ts,
-      db/ai-decision-repository.ts + таблица ai_decisions в DynamoDB."
-  - id: task-1623
-    title: Торговое ядро и риск-контроль
-    description: "Реализовать торговое ядро и риск-контроль: цикл решений по таймеру
-      и событиям, исполнение ордеров через broker.execute_order() с обработкой
-      ошибок и ретраями, жёсткие правила риск-менеджмента (макс. % на сделку,
-      макс. позиций, дневная и общая просадка, лимит сделок в день), проверки
-      перед каждым ордером (брокер разрешает, маржа, whitelist символов), защита
-      от дублей через Redis, команды /pause, /resume, /settings."
-    status: completed
-    acceptance_criteria:
-      - Торговое ядро запускает цикл решений по таймеру и по событиям (закрытие
-        свечи, резкое движение)
-      - Движок открывает и закрывает сделку через broker.execute_order() с
-        обработкой ошибок и ретраями
-      - "Риск-менеджмент блокирует сделки при превышении лимитов: % баланса на
-        сделку, максимум позиций, лимит сделок в день"
-      - При дневной просадке выше лимита торговля автоматически ставится на
-        паузу до следующего дня
-      - При общей просадке выше лимита торговля останавливается и админ получает
-        уведомление
-      - /pause и /resume позволяют пользователю остановить и возобновить торговлю
-      - /settings позволяет настроить риск на сделку, максимум позиций, список
-        символов и режим AI
-      - Защита от дублей через Redis-блокировку на символ+направление
-    summary: "Реализовано торговое ядро (engine/trading-core.ts): цикл решений по
-      таймеру, событиям закрытия свечи и резкого движения; исполнение ордеров
-      через broker.execute_order() с ретраями (engine/executor.ts).
-      Риск-менеджмент (engine/risk-manager.ts) блокирует сделки по % на сделку,
-      максимуму позиций, лимиту сделок в день, дневной (автопауза до след. дня)
-      и общей (автостоп с уведомлением админу) просадке, whitelist-символам и
-      марже. Защита от дублей через блокировку символ+направление
-      (engine/lock.ts, Redis-совместимая с in-memory фолбэком). В бот добавлены
-      /pause, /resume, /settings (bot/control.ts); новые таблицы
-      trading_settings и trading_state в DynamoDB. Основная реализация: engine/
-      и broker/base.ts."
-  - id: task-4237
-    title: Самообучение на истории сделок
-    description: "Реализовать самообучение без fine-tuning: сбор датасета из сделок
-      со снимками контекста, суточный learning-отчёт через DeepSeek,
-      версионирование стратегий с автоматическим расчётом метрик, A/B режим
-      сравнения стратегий, анти-оверфит ограничения, откат стратегии админом."
-    status: completed
-    acceptance_criteria:
-      - Каждая сделка сохраняет снимок контекста (рынок, индикаторы, решение AI,
-        reasoning) и результат
-      - "Раз в сутки генерируется learning-отчёт через DeepSeek: анализ
-        последних сделок, паттерны успехов/неудач, корректировки правил"
-      - При наличии изменений создаётся новая версия стратегии с автоматическим
-        расчётом метрик (винрейт, профит-фактор, просадка)
-      - Поддерживается A/B режим сравнения текущей и тестовой стратегии
-      - "Действуют анти-оверфит ограничения: глубина истории (последние 60
-        дней), минимум 30 сделок для правил"
-      - Админ может откатить стратегию на любую предыдущую версию
-    summary: "Реализовано самообучение без fine-tuning: сделки сохраняют снимок
-      контекста (рынок, индикаторы, решение AI, reasoning) и результат; суточный
-      learning-отчёт через DeepSeek; новые версии стратегий с авторасчётом
-      метрик (винрейт, PF, просадка); A/B-сравнение и откат админом;
-      анти-оверфит (60 дней, 30 сделок). Команды /learning, /strategy,
-      /strategy_ab; реализация: learning/."
-  - id: task-1963
-    title: Подписки и админ-панель
-    description: "Реализовать подписки и админ-панель: роли admin/subscriber/guest,
-      таблица users с подпиской, админ-команды /admin, /grant, /revoke, /users,
-      /broadcast, /global_pause, проверка активной подписки на каждом защищённом
-      хендлере."
-    status: completed
-    acceptance_criteria:
-      - Админ выдаёт и отзывает доступ через /admin (/grant, /revoke)
-      - /users показывает список пользователей
-      - /broadcast отправляет сообщение всем пользователям
-      - /global_pause останавливает торговлю у всех
-      - Пользователь без активной подписки не может пользоваться защищёнными
-        функциями
-      - Админ-команды видны только пользователям из ADMIN_TELEGRAM_IDS
-    summary: "Реализованы подписки и админ-панель: роли admin/subscriber/guest,
-      таблицы users и global_state в DynamoDB (мигрированы). SubscriptionService
-      (subscriptions/service.ts) выдает/отзывает подписку со сроком и проверяет
-      активность; guard-мидлварь в bot/bot.ts закрывает защищённые хендлеры без
-      подписки. Админ-команды /admin, /grant, /revoke, /users, /broadcast,
-      /global_pause (admin/commands.ts) доступны только из ADMIN_TELEGRAM_IDS и
-      видны в /help только админам; /global_pause останавливает торговлю у всех
-      через TradingCore.isGlobalPaused."
-  - id: task-0909
-    title: Безопасность, шифрование и аудит
-    description: "Реализовать безопасность и аудит: шифрование API-ключей Fernet с
-      ключом из .env, хранение только шифра в БД, аудит всех торговых действий и
-      изменений настроек в audit_log, конфигурация только через .env,
-      структурированные логи с user_id и request_id."
-    status: completed
-    acceptance_criteria:
-      - API-ключи брокера шифруются (Fernet, ключ из .env), в БД хранится только
-        шифр
-      - Админ не видит API-ключи пользователей
-      - Все торговые действия и изменения настроек пишутся в audit_log (кто,
-        когда, что)
-      - Секреты только через .env, в коде нет хардкодов
-      - "Конфигурация читается из .env: TELEGRAM_BOT_TOKEN, DEEPSEEK_API_KEY,
-        ENCRYPTION_KEY, DATABASE_URL, REDIS_URL, ADMIN_TELEGRAM_IDS,
-        BROKER_API_BASE_URL, BROKER_API_KEY_HEADER, DEFAULT_RISK_PER_TRADE,
-        MAX_POSITIONS, DAILY_DRAWDOWN_LIMIT, TOTAL_DRAWDOWN_LIMIT"
-    summary: "Реализованы безопасность и аудит: API-ключи брокера шифруются
-      Fernet-ом (core/crypto.ts, ключ из ENCRYPTION_KEY, перекрёстно проверен с
-      эталонной Python-реализацией cryptography), в БД (broker_connections)
-      хранится только шифр + отпечаток; админ не видит ключи. Добавлена таблица
-      audit_log (DynamoDB + in-memory) и AuditService (core/audit.ts): в журнал
-      пишутся все торговые действия (trade.open/close/rejected/error), изменения
-      настроек (settings.update), паузы/возобновление, подключение брокера,
-      админ-действия и управление стратегиями — кто, когда, что. Секреты и
-      дефолты риска читаются только из .env (core/config.ts, lib/db.ts,
-      .env.example); структурные JSON-логи с userId и requestId через
-      core/logger.ts + requestId-мидлварь бота (bot/request-context.ts)."
-  - id: task-9020
-    title: Тесты и docker-compose
-    description: Добавить тесты (pytest + pytest-asyncio) на торговое ядро,
-      риск-менеджмент и парсинг AI-ответа с покрытием ядра ≥ 70%, и
-      docker-compose, который поднимает весь проект одной командой.
-    status: completed
-    acceptance_criteria:
-      - pytest + pytest-asyncio настроены, покрытие ядра ≥ 70%
-      - Есть тесты на торговое ядро, риск-менеджмент и парсинг AI-ответа
-      - docker-compose поднимает весь проект одной командой (бот, БД, Redis)
-      - Type hints везде, Pydantic v2 для DTO и конфигов, async-first
-    summary: "Добавлены pytest + pytest-asyncio тесты на Python-ядро (pycore/):
-      торговое ядро (trading_core.py), риск-менеджмент (risk_manager.py) и
-      парсинг AI-ответа (ai_parser.py) с Pydantic v2 DTO/конфигами, type hints и
-      async-first; покрытие ядра 96% при пороге 70% (pyproject.toml c coverage,
-      requirements-dev.txt, tests/). docker-compose.yml расширен сервисами bot и
-      redis — весь проект (бот, DynamoDB, Redis) поднимается одной командой.
-      Основная реализация: pycore/, tests/, pyproject.toml, docker-compose.yml."
-  - id: task-9978
-    title: "Инструкция: перенос бота на сервер"
-    description: "Пользователь спрашивает: «как мне перенести бота на сервер?».
-      Нужно изучить конфигурацию проекта (docker-compose, переменные окружения,
-      команды запуска, зависимости) и подготовить пошаговую инструкцию для
-      переноса бота на отдельный сервер: что скопировать, какие секреты и
-      переменные окружения заполнить на сервере, как запустить проект одной
-      командой и как убедиться, что бот работает. Файлы проекта менять нельзя —
-      это readonly-задача. Ответ пользователю записать в summary
-      completed-задачи."
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_6ddddccef84e46ae823d0699
+    summary: |-
+      Торговый цикл после перезапуска бота молчал, потому что первый тик
+      выполнялся только после первого интервала (по умолчанию 5 минут),
+      а ошибки чтения списка пользователей в tick()/runForEvent() молча
+      проглатывались. Исправлено в engine/trading-core.ts: первый tick
+      запускается сразу после старта цикла, ошибки resolveUserIds теперь
+      логируются как error, добавлена диагностика итераций (число
+      пользователей) и ветки «у пользователя нет разрешённых символов».
+      В bot/bot.ts уточнён стартовый лог цикла. Теперь сразу после рестарта
+      в логах видны шаги цикла: анализ рынка через DeepSeek, сигнал/hold,
+      risk_block, открытие/закрытие сделок и ошибки.
+  - id: task-0848
+    title:
+      Выдать полный актуальный код файлов engine/trading-core.ts и bot/bot.ts
+      для замены на сервере
+    description: "Пользователь просит выдать полный код файлов, которые нужно
+      заменить на сервере, чтобы торговый цикл заработал (в логах после запуска
+      нет ни одной записи от цикла). Нужно прочитать актуальную реализацию
+      engine/trading-core.ts и bot/bot.ts в репозитории проекта и выдать их
+      полный текст, готовый к копированию, вместе с краткой инструкцией по
+      замене на сервере (запись файла через cat > файл << 'EOF' ... EOF, затем
+      docker compose restart bot и проверка логов). Файлы проекта менять нельзя
+      — это readonly-задача. Ответ пользователю записать в summary
+      completed-задачи: полный код обоих файлов и краткая инструкция по их
+      замене и перезапуску бота."
     status: completed
     acceptance_criteria:
       - Задача завершена со статусом completed
-      - "В summary задачи содержится понятная пользователю инструкция по
-        переносу бота на сервер: какие файлы нужны, какие переменные окружения
-        заполнить, какая команда запускает проект, как проверить, что бот
-        работает"
-    summary: "Перенос бота на сервер: скопируйте весь репозиторий (код, а не
-      node_modules/.next) на сервер с установленными Docker и Docker Compose.
-      Создайте из .env.example файл .env и заполните секреты: TELEGRAM_BOT_TOKEN
-      (от @BotFather), DEEPSEEK_API_KEY, ENCRYPTION_KEY (команда генерации — в
-      комментарии .env.example), ADMIN_TELEGRAM_IDS, опционально REDIS_URL и
-      параметры брокера (BROKER_TYPE/BROKER_API_BASE_URL/BROKER_API_KEY_HEADER)
-      с лимитами риска; BOT_DRY_RUN=false. Docker compose сам поднимает DynamoDB
-      и Redis и мигрирует схему (команда db:migrate в сервисах app/bot). Запуск
-      одной командой: docker compose up -d --build (или npm run docker:dev).
-      Проверка: docker compose ps — все сервисы healthy; docker compose logs bot
-      — строка «бот запущен и подключён к Telegram»; затем напишите боту /start
-      — он должен ответить."
-  - id: task-0696
-    title: "Пошаговая инструкция: перенос на пустой сервер через GitHub"
-    description: "Пользователь спрашивает: «Говори пошагово что делать, у меня есть
-      пустой сервер. Переносить на него будем через гит хаб». Нужно изучить
-      конфигурацию проекта (docker-compose, .env.example, команды запуска,
-      зависимости) и подготовить пошаговую инструкцию для переноса бота на
-      пустой сервер через GitHub: 1) как загрузить проект в GitHub-репозиторий
-      (если ещё не загружен), 2) как подключиться к серверу по SSH, 3) что
-      установить на сервере (git, Docker, Docker Compose), 4) как склонировать
-      репозиторий, 5) как создать .env из .env.example и какие секреты
-      заполнить, 6) какая команда запускает проект, 7) как проверить, что бот
-      работает. Файлы проекта менять нельзя — это readonly-задача. Ответ
-      пользователю записать в summary completed-задачи."
-    status: completed
-    acceptance_criteria:
-      - Задача завершена со статусом completed
-      - "В summary задачи содержится пошаговая инструкция для переноса бота на
-        пустой сервер через GitHub: как загрузить код в GitHub (если ещё не
-        загружен), как подключиться к серверу, какие пакеты установить (Docker,
-        Docker Compose, git), как склонировать репозиторий, как создать и
-        заполнить .env, какая команда запускает проект, как проверить, что бот
-        работает"
-    summary: "Перенос через GitHub: 1) создайте пустой репо на github.com и залейте
-      код: `git remote add origin URL && git push -u origin main` (.env в
-      .gitignore — секреты не уедут). 2) `ssh user@IP`. 3) Установите git,
-      Docker+Compose (`curl -fsSL https://get.docker.com | sh`) и Node 24 (для
-      `npm install`). 4) `git clone URL && cd repo`; 5) `npm install`
-      (node_modules не в git). 6) `cp .env.example .env`, заполните
-      TELEGRAM_BOT_TOKEN (BotFather), DEEPSEEK_API_KEY, ENCRYPTION_KEY (команда
-      генерации в комментарии .env.example), ADMIN_TELEGRAM_IDS, лимиты риска,
-      BOT_DRY_RUN=false (.env.docker с настройками DynamoDB уже в репо). 7)
-      Запуск: `docker compose up -d --build` (bot сам мигрирует схему). 8)
-      Проверка: `docker compose ps` — все healthy; `docker compose logs bot` —
-      «бот запущен и подключён к Telegram»; затем напишите боту /start."
-  - id: task-2453
-    title: "Пошаговая инструкция: загрузка через PowerShell и перенос на сервер"
-    description: "Пользователь уточнил: «на гит хаб будем грузить через повершел с
-      рабочего стола». Нужно изучить конфигурацию проекта (docker-compose,
-      .env.example, команды запуска, зависимости, .gitignore) и подготовить
-      пошаговую инструкцию для переноса бота на пустой сервер через GitHub, где
-      загрузка кода в GitHub выполняется через PowerShell с рабочего стола
-      (Windows): 1) как подготовить проект к загрузке (проверить .gitignore, что
-      .env не попадёт в репозиторий), 2) как создать репозиторий на GitHub, 3)
-      какие команды PowerShell выполнить на рабочем столе для загрузки кода (git
-      init/add/commit/branch/remote/push), 4) как подключиться к серверу по SSH,
-      5) что установить на сервере (git, Docker, Docker Compose), 6) как
-      склонировать репозиторий, 7) как создать .env из .env.example и какие
-      секреты заполнить, 8) какая команда запускает проект, 9) как проверить,
-      что бот работает. Файлы проекта менять нельзя — это readonly-задача. Ответ
-      пользователю записать в summary completed-задачи."
-    status: completed
-    acceptance_criteria:
-      - Задача завершена со статусом completed
-      - "В summary задачи содержится пошаговая инструкция для переноса бота на
-        пустой сервер через GitHub, где загрузка кода в GitHub выполняется через
-        PowerShell с рабочего стола (Windows): как подготовить проект к
-        загрузке, как создать репозиторий на GitHub, какие команды PowerShell
-        выполнить для загрузки кода, как убедиться, что секреты (.env) не
-        попадут в репозиторий, как подключиться к серверу по SSH, какие пакеты
-        установить на сервере (git, Docker, Docker Compose), как склонировать
-        репозиторий, как создать и заполнить .env, какая команда запускает
-        проект, как проверить, что бот работает"
-    summary: 'Перенос через GitHub, загрузка через PowerShell: .env уже в .gitignore
-      — секреты не попадут в репозиторий. 1) Создайте пустой репо на github.com.
-      2) PowerShell: git init; git add .; git commit -m "init"; git branch -M
-      main; git remote add origin URL; git push -u origin main. 3) ssh user@IP.
-      4) Установите git и Docker+Compose: curl -fsSL https://get.docker.com |
-      sh. 5) git clone URL && cd repo. 6) cp .env.example .env; заполните
-      TELEGRAM_BOT_TOKEN, DEEPSEEK_API_KEY, ENCRYPTION_KEY (генерация в
-      комментарии .env.example), ADMIN_TELEGRAM_IDS, лимиты риска;
-      BOT_DRY_RUN=false. 7) docker compose up -d --build. 8) Проверка: docker
-      compose ps (все healthy); docker compose logs bot — «бот запущен и
-      подключён к Telegram»; затем /start боту.'
-  - id: task-3730
-    title: "Исправить docker-compose.yml: сервис bot не получает переменные
-      окружения DEEPSEEK_API_KEY, ENCRYPTION_KEY, ADMIN_TEL..."
-    description: "Исправить docker-compose.yml: сервис bot не получает переменные
-      окружения DEEPSEEK_API_KEY, ENCRYPTION_KEY, ADMIN_TELEGRAM_IDS из .env,
-      из-за чего бот зависает при запуске в контейнере (переменные пустые).
-      Нужно добавить в environment сервиса bot проброс этих переменных из .env
-      по аналогии с TELEGRAM_BOT_TOKEN: DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-},
-      ENCRYPTION_KEY=${ENCRYPTION_KEY:-},
-      ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS:-}. Также проверить, что сервис
-      app при необходимости получает те же переменные."
+      - В summary задачи содержится полный актуальный код файлов
+        engine/trading-core.ts и bot/bot.ts, готовый к копированию и замене на
+        сервере, и краткая инструкция по замене файлов и перезапуску бота
+    summary: "task-0848 (readonly): выданы актуальные файлы торгового цикла для
+      замены на сервере. Основная реализация исправленного цикла —
+      engine/trading-core.ts (первый tick сразу после старта, диагностика пустых
+      веток, rate-limit backoff, защита от дублей через lockStore) и bot/bot.ts
+      (сборка TradingCore и onEvent-логирование шагов цикла в лог). Ниже полный
+      код обоих файлов и инструкция:
+
+
+      # Замена файлов торгового цикла на сервере
+
+      # 1) Подключитесь к серверу, зайдите в каталог проекта (там, где лежит
+      docker-compose.yml)
+
+      # 2) Запишите файлы через heredoc (копируйте блок целиком):
+
+
+      cat > engine/trading-core.ts << 'EOF'
+
+      import type { BaseBroker, PositionSide } from \"../broker/base\";
+
+      import { UpscaleApiError } from \"../broker\";
+
+      import type { AnalyzeResult, AiAnalysisService } from \"../ai/service\";
+
+      import type { TradeSignal } from \"../ai/schema\";
+
+      import type { MarketDataProvider } from \"../ai/market-data\";
+
+      import { isSymbolAllowed, type TradingSettings } from \"./types\";
+
+      import {
+
+      \  RiskManager,
+
+      \  aiModeMultiplier,
+
+      \  type BrokerSnapshot,
+
+      } from \"./risk-manager\";
+
+      import { OrderExecutor } from \"./executor\";
+
+      import type { LockStore } from \"./lock\";
+
+      import type { LearningRecorder } from \"../learning/types\";
+
+      import type { AuditService } from \"../core/audit\";
+
+      import { createRequestId } from \"../core/request-id\";
+
+
+      export const DEFAULT_DECISION_INTERVAL_MS = 300_000;
+
+      export const DEFAULT_LOCK_TTL_MS = 30_000;
+
+      /** Пауза перед следующей итерацией после ошибки rate limit брокера (429).
+      */
+
+      export const RATE_LIMIT_BACKOFF_MS = 5_000;
+
+
+      export type EngineEventType =
+
+      \  | \"signal\"
+
+      \  | \"trade_open\"
+
+      \  | \"trade_close\"
+
+      \  | \"risk_block\"
+
+      \  | \"dup_skip\"
+
+      \  | \"admin_notify\"
+
+      \  | \"pause_changed\"
+
+      \  | \"error\"
+
+      \  | \"diagnostic\";
+
+
+      export interface EngineEvent {
+
+      \  type: EngineEventType;
+
+      \  userId: number;
+
+      \  symbol: string;
+
+      \  side?: PositionSide;
+
+      \  message: string;
+
+      \  data?: Record<string, unknown>;
+
+      \  at: string;
+
+      \  requestId?: string;
+
+      }
+
+
+      export interface TradingCoreDeps {
+
+      \  riskManager: RiskManager;
+
+      \  executor: OrderExecutor;
+
+      \  lockStore: LockStore;
+
+      \  ai: AiAnalysisService;
+
+      \  marketData: MarketDataProvider;
+
+      \  resolveBroker: (userId: number) => Promise<BaseBroker | null>;
+
+      \  resolveUserIds: () => Promise<number[]>;
+
+      \  /** Колбэк уведомления админа (например, при общей просадке). */
+
+      \  notifyAdmin?: (userId: number, message: string) => void;
+
+      \  /** Все известные символы, доступные для торговли. */
+
+      \  supportedSymbols: readonly string[];
+
+      \  decisionIntervalMs?: number;
+
+      \  lockTtlMs?: number;
+
+      \  /** Внешний наблюдатель событий (телеметрия/логирование). */
+
+      \  onEvent?: (event: EngineEvent) => void;
+
+      \  /** Запись датасета сделок для самообучения. */
+
+      \  learning: LearningRecorder;
+
+      \  /** Глобальная пауза (/global_pause): при true торговля остановлена у
+      всех. */
+
+      \  isGlobalPaused?: () => Promise<boolean> | boolean;
+
+      \  /** Журнал аудита (торговые действия, риск-блокировки, ошибки). */
+
+      \  audit?: AuditService;
+
+      }
+
+
+      function roundQuantity(value: number): number {
+
+      \  if (value <= 0) {
+
+      \    return 0;
+
+      \  }
+
+      \  return Math.round(value * 10_000) / 10_000;
+
+      }
+
+
+      /**
+
+      \ * Торговое ядро: запускает цикл решений по таймеру и по событиям
+
+      \ * (закрытие свечи, резкое движение), исполняет ордера через
+
+      \ * broker.execute_order() с ретраями, применяет риск-контроль и защиту
+
+      \ * от дублей.
+
+      \ */
+
+      export class TradingCore {
+
+      \  private readonly decisionIntervalMs: number;
+
+      \  private readonly lockTtlMs: number;
+
+      \  private readonly supportedSymbols: readonly string[];
+
+      \  private timer: ReturnType<typeof setInterval> | null = null;
+
+      \  private running = false;
+
+
+      \  constructor(private readonly deps: TradingCoreDeps) {
+
+      \    this.decisionIntervalMs =
+
+      \      deps.decisionIntervalMs ?? DEFAULT_DECISION_INTERVAL_MS;
+
+      \    this.lockTtlMs = deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS;
+
+      \    this.supportedSymbols = [...deps.supportedSymbols];
+
+      \  }
+
+
+      \  /** Запускает цикл решений по таймеру. */
+
+      \  start(): void {
+
+      \    if (this.running) {
+
+      \      return;
+
+      \    }
+
+      \    this.running = true;
+
+      \    this.emit(
+
+      \      event(
+
+      \        \"diagnostic\",
+
+      \        0,
+
+      \        \"\",
+
+      \        `торговый цикл запущен: интервал ${this.decisionIntervalMs} мс`,
+
+      \        {
+
+      \          decisionIntervalMs: this.decisionIntervalMs,
+
+      \          lockTtlMs: this.lockTtlMs,
+
+      \          symbols: this.supportedSymbols,
+
+      \        },
+
+      \        createRequestId()
+
+      \      )
+
+      \    );
+
+      \    // Первый тик выполняем сразу после старта, а не дожидаясь первого
+
+      \    // интервала (по умолчанию 5 минут): иначе после перезапуска бота,
+      пока
+
+      \    // дойдёт первый tick, торговый цикл молчит, и в логах видны только
+      строки
+
+      \    // запуска.
+
+      \    void this.tick().catch((error) => this.onTickFatal(error));
+
+      \    this.timer = setInterval(() => {
+
+      \      void this.tick().catch((error) => this.onTickFatal(error));
+
+      \    }, this.decisionIntervalMs);
+
+      \    this.timer.unref?.();
+
+      \  }
+
+
+      \  /** Останавливает таймер. Команда-резерв для /global_pause. */
+
+      \  stopPumping(): void {
+
+      \    if (this.timer) {
+
+      \      clearInterval(this.timer);
+
+      \      this.timer = null;
+
+      \    }
+
+      \    this.running = false;
+
+      \  }
+
+
+      \  /**
+
+      \   * Последняя линия защиты: исключение никогда не должно выходить из
+      tick()
+
+      \   * в `void this.tick()` (иначе unhandled rejection роняет процесс).
+
+      \   */
+
+      \  private onTickFatal(error: unknown): void {
+
+      \    const requestId = createRequestId();
+
+      \    try {
+
+      \      this.emit(
+
+      \        event(
+
+      \          \"error\",
+
+      \          0,
+
+      \          \"\",
+
+      \          `Необработанная ошибка торгового цикла: ${
+
+      \            error instanceof Error ? error.message : String(error)
+
+      \          }`,
+
+      \          { requestId },
+
+      \          requestId
+
+      \        )
+
+      \      );
+
+      \    } catch {
+
+      \      // Ошибка наблюдателя не должна ронять процесс.
+
+      \    }
+
+      \  }
+
+
+      \  /** Полный цикл решений по таймеру для всех пользователей и символов.
+      */
+
+      \  async tick(): Promise<void> {
+
+      \    const requestId = createRequestId();
+
+      \    let userIds: number[];
+
+      \    try {
+
+      \      userIds = await this.deps.resolveUserIds();
+
+      \    } catch (error) {
+
+      \      // Если БД/репозиторий подключений недоступен — цикл не должен
+      молча
+
+      \      // пропускать итерацию: пишем ошибку, чтобы причина была видна в
+      логах.
+
+      \      this.emit(
+
+      \        event(
+
+      \          \"error\",
+
+      \          0,
+
+      \          \"\",
+
+      \          `Ошибка чтения списка подключённых пользователей: ${
+
+      \            error instanceof Error ? error.message : String(error)
+
+      \          }`,
+
+      \          { source: \"timer\" },
+
+      \          requestId
+
+      \        )
+
+      \      );
+
+      \      return;
+
+      \    }
+
+
+      \    if (userIds.length === 0) {
+
+      \      // Самая частая причина «пустых» логов: боту не для кого торговать.
+
+      \      // Пишем диагностику, чтобы это было очевидно, а не молчанием.
+
+      \      this.emit(
+
+      \        event(
+
+      \          \"diagnostic\",
+
+      \          0,
+
+      \          \"\",
+
+      \          \"торговый цикл: нет подключённых пользователей (выполните
+      /connect в боте)\",
+
+      \          { source: \"timer\" },
+
+      \          requestId
+
+      \        )
+
+      \      );
+
+      \      return;
+
+      \    }
+
+
+      \    for (const userId of userIds) {
+
+      \      let symbols: string[];
+
+      \      try {
+
+      \        symbols = await this.symbolsForUser(userId);
+
+      \      } catch (error) {
+
+      \        this.emit(
+
+      \          event(
+
+      \            \"error\",
+
+      \            userId,
+
+      \            \"\",
+
+      \            `Ошибка чтения настроек пользователя ${userId}: ${
+
+      \              error instanceof Error ? error.message : String(error)
+
+      \            }`,
+
+      \            { source: \"timer\" },
+
+      \            requestId
+
+      \          )
+
+      \        );
+
+      \        continue;
+
+      \      }
+
+      \      if (symbols.length === 0) {
+
+      \        // Тихая ветка: пользователь есть, но whitelist не совпадает ни с
+
+      \        // одним поддерживаемым символом. Раньше цикл молча ничего не
+      делал.
+
+      \        this.emit(
+
+      \          event(
+
+      \            \"diagnostic\",
+
+      \            userId,
+
+      \            \"\",
+
+      \            \"торговый цикл: у пользователя нет символов для торговли
+      (whitelist не пересекается с поддерживаемыми)\",
+
+      \            { source: \"timer\" },
+
+      \            requestId
+
+      \          )
+
+      \        );
+
+      \        continue;
+
+      \      }
+
+      \      for (const symbol of symbols) {
+
+      \        try {
+
+      \          await this.evaluateSymbol(userId, symbol, \"timer\");
+
+      \        } catch (error) {
+
+      \          this.emit(
+
+      \            event(
+
+      \              \"error\",
+
+      \              userId,
+
+      \              symbol,
+
+      \              `Необработанная ошибка обработки ${symbol}: ${
+
+      \                error instanceof Error ? error.message : String(error)
+
+      \              }`,
+
+      \              { source: \"timer\" },
+
+      \              requestId
+
+      \            )
+
+      \          );
+
+      \        }
+
+      \      }
+
+      \    }
+
+      \  }
+
+
+      \  /** Событие: закрытие свечи. */
+
+      \  async onCandleClose(symbol: string, _timeframe?: string): Promise<void>
+      {
+
+      \    await this.runForEvent(symbol, \"candle_close\");
+
+      \  }
+
+
+      \  /** Событие: резкое движение цены (процент и направление). */
+
+      \  async onSharpMove(symbol: string, percent: number): Promise<void> {
+
+      \    const threshold = 2;
+
+      \    if (Math.abs(percent) < threshold) {
+
+      \      return;
+
+      \    }
+
+      \    await this.runForEvent(symbol, \"sharp_move\");
+
+      \  }
+
+
+      \  private async runForEvent(symbol: string, source: string):
+      Promise<void> {
+
+      \    let userIds: number[];
+
+      \    try {
+
+      \      userIds = await this.deps.resolveUserIds();
+
+      \    } catch (error) {
+
+      \      this.emit(
+
+      \        event(
+
+      \          \"error\",
+
+      \          0,
+
+      \          symbol,
+
+      \          `Ошибка чтения списка подключённых пользователей: ${
+
+      \            error instanceof Error ? error.message : String(error)
+
+      \          }`,
+
+      \          { source },
+
+      \          createRequestId()
+
+      \        )
+
+      \      );
+
+      \      return;
+
+      \    }
+
+      \    for (const userId of userIds) {
+
+      \      try {
+
+      \        const settings = await this.deps.riskManager.getSettings(userId);
+
+      \        if (isSymbolAllowed(settings, symbol)) {
+
+      \          await this.evaluateSymbol(userId, symbol, source);
+
+      \        }
+
+      \      } catch (error) {
+
+      \        this.emit(
+
+      \          event(
+
+      \            \"error\",
+
+      \            userId,
+
+      \            symbol,
+
+      \            `Необработанная ошибка обработки события ${source}: ${
+
+      \              error instanceof Error ? error.message : String(error)
+
+      \            }`,
+
+      \            { source },
+
+      \            createRequestId()
+
+      \          )
+
+      \        );
+
+      \      }
+
+      \    }
+
+      \  }
+
+
+      \  private async symbolsForUser(userId: number): Promise<string[]> {
+
+      \    const settings = await this.deps.riskManager.getSettings(userId);
+
+      \    if (settings.symbols.length > 0) {
+
+      \      return this.supportedSymbols.filter((symbol) =>
+
+      \        isSymbolAllowed(settings, symbol)
+
+      \      );
+
+      \    }
+
+      \    return [...this.supportedSymbols];
+
+      \  }
+
+
+      \  private emit(event: EngineEvent): void {
+
+      \    this.deps.onEvent?.(event);
+
+      \  }
+
+
+      \  /**
+
+      \   * Цикл решений для одного пользователя и символа: анализ AI,
+      риск-контроль,
+
+      \   * исполнение ордера под защитой от дублей.
+
+      \   */
+
+      \  async evaluateSymbol(
+
+      \    userId: number,
+
+      \    symbol: string,
+
+      \    source: string
+
+      \  ): Promise<EngineEvent[]> {
+
+      \    const normSymbol = symbol.trim().toUpperCase();
+
+      \    const requestId = createRequestId();
+
+      \    const events: EngineEvent[] = [];
+
+
+      \    // Глобальная пауза админом (/global_pause) останавливает торговлю у
+      всех.
+
+      \    if (await this.deps.isGlobalPaused?.()) {
+
+      \      this.emit(
+
+      \        event(
+
+      \          \"diagnostic\",
+
+      \          userId,
+
+      \          normSymbol,
+
+      \          \"пропуск: глобальная пауза (/global_pause)\",
+
+      \          { source },
+
+      \          requestId
+
+      \        )
+
+      \      );
+
+      \      return events;
+
+      \    }
+
+
+      \    let broker: BaseBroker | null;
+
+      \    try {
+
+      \      broker = await this.deps.resolveBroker(userId);
+
+      \    } catch (error) {
+
+      \      this.pushError(
+
+      \        events,
+
+      \        userId,
+
+      \        normSymbol,
+
+      \        \"Ошибка получения клиента брокера\",
+
+      \        error,
+
+      \        requestId
+
+      \      );
+
+      \      return events;
+
+      \    }
+
+
+      \    if (!broker) {
+
+      \      this.emit(
+
+      \        event(
+
+      \          \"diagnostic\",
+
+      \          userId,
+
+      \          normSymbol,
+
+      \          \"пропуск: брокер не подключён (выполните /connect)\",
+
+      \          { source },
+
+      \          requestId
+
+      \        )
+
+      \      );
+
+      \      return events;
+
+      \    }
+
+
+      \    let settings: TradingSettings;
+
+      \    try {
+
+      \      settings = await this.deps.riskManager.getSettings(userId);
+
+      \    } catch (error) {
+
+      \      this.pushError(
+
+      \        events,
+
+      \        userId,
+
+      \        normSymbol,
+
+      \        \"Ошибка чтения настроек торговли\",
+
+      \        error,
+
+      \        requestId
+
+      \      );
+
+      \      return events;
+
+      \    }
+
+      \    if (!isSymbolAllowed(settings, normSymbol)) {
+
+      \      this.emit(
+
+      \        event(
+
+      \          \"diagnostic\",
+
+      \          userId,
+
+      \          normSymbol,
+
+      \          \"пропуск: символ не разрешён настройками (/settings
+      symbols=...)\",
+
+      \          { source },
+
+      \          requestId
+
+      \        )
+
+      \      );
+
+      \      return events;
+
+      \    }
+
+
+      \    // Ошибки брокера (в т.ч. 429 rate limit) не должны ронять процесс:
+
+      \    // пропускаем итерацию и, при rate limit, делаем короткую паузу.
+
+      \    let snapshot: BrokerSnapshot;
+
+      \    try {
+
+      \      snapshot = await this.buildSnapshot(broker);
+
+      \    } catch (error) {
+
+      \      this.pushError(
+
+      \        events,
+
+      \        userId,
+
+      \        normSymbol,
+
+      \        \"Ошибка получения состояния счёта (брокер недоступен)\",
+
+      \        error,
+
+      \        requestId
+
+      \      );
+
+      \      await this.maybeRateLimitBackoff(error);
+
+      \      return events;
+
+      \    }
+
+      \    const existing = snapshot.positions.find(
+
+      \      (position) => position.symbol.toUpperCase() === normSymbol
+
+      \    );
+
+
+      \    this.emit(
+
+      \      event(
+
+      \        \"diagnostic\",
+
+      \        userId,
+
+      \        normSymbol,
+
+      \        \"AI-анализ: сбор рыночных данных и запрос к DeepSeek\",
+
+      \        { source, requestId },
+
+      \        requestId
+
+      \      )
+
+      \    );
+
+      \    let analysis: AnalyzeResult<TradeSignal>;
+
+      \    try {
+
+      \      analysis = await this.deps.ai.analyzeSignal({
+
+      \        userId,
+
+      \        symbol: normSymbol,
+
+      \      });
+
+      \    } catch (error) {
+
+      \      this.pushError(
+
+      \        events,
+
+      \        userId,
+
+      \        normSymbol,
+
+      \        \"Ошибка AI-анализа\",
+
+      \        error,
+
+      \        requestId
+
+      \      );
+
+      \      await this.maybeRateLimitBackoff(error);
+
+      \      return events;
+
+      \    }
+
+
+      \    const signal = analysis.decision;
+
+      \    if (!signal) {
+
+      \      this.emit(
+
+      \        event(
+
+      \          \"signal\",
+
+      \          userId,
+
+      \          normSymbol,
+
+      \          \"AI: нет сигнала (hold/невалидный ответ)\",
+
+      \          { source, requestId },
+
+      \          requestId
+
+      \        )
+
+      \      );
+
+      \      return events;
+
+      \    }
+
+      \    this.emit(
+
+      \      event(
+
+      \        \"signal\",
+
+      \        userId,
+
+      \        normSymbol,
+
+      \        formatSignal(signal),
+
+      \        { source, confidence: signal.confidence, requestId },
+
+      \        requestId
+
+      \      )
+
+      \    );
+
+
+      \    const openSide = signalToSide(signal);
+
+
+      \    if (existing) {
+
+      \      // Закрытие существующей позиции.
+
+      \      if (
+
+      \        signal.action === \"hold\" ||
+
+      \        openSide === null ||
+
+      \        openSide === existing.side
+
+      \      ) {
+
+      \        return events;
+
+      \      }
+
+      \      const key = lockKey(
+
+      \        userId,
+
+      \        normSymbol,
+
+      \        `${existing.side}:close` as PositionSide
+
+      \      );
+
+      \      if (!(await this.deps.lockStore.acquire(key, this.lockTtlMs))) {
+
+      \        this.emit(
+
+      \          event(
+
+      \            \"dup_skip\",
+
+      \            userId,
+
+      \            normSymbol,
+
+      \            \"Пропуск: ордер на закрытие уже исполняется\",
+
+      \            { source, requestId },
+
+      \            requestId
+
+      \          )
+
+      \        );
+
+      \        return events;
+
+      \      }
+
+      \      try {
+
+      \        const receipt = await this.deps.executor.execute(broker, {
+
+      \          symbol: normSymbol,
+
+      \          side: existing.side,
+
+      \          action: \"close\",
+
+      \          quantity: existing.quantity,
+
+      \        });
+
+      \        this.emit(
+
+      \          event(
+
+      \            \"trade_close\",
+
+      \            userId,
+
+      \            normSymbol,
+
+      \            `Позиция закрыта по ${receipt.executedPrice}`,
+
+      \            { source, receipt, requestId },
+
+      \            requestId
+
+      \          )
+
+      \        );
+
+      \        await this.deps.audit?.tradeClose({
+
+      \          userId,
+
+      \          actorRole: \"system\",
+
+      \          requestId,
+
+      \          entityType: \"order\",
+
+      \          entityId: receipt.orderId,
+
+      \          details: {
+
+      \            symbol: normSymbol,
+
+      \            side: existing.side,
+
+      \            action: \"close\",
+
+      \            quantity: existing.quantity,
+
+      \            price: receipt.executedPrice,
+
+      \            executedAt: receipt.executedAt,
+
+      \            source,
+
+      \          },
+
+      \        });
+
+      \        await this.deps.learning.recordTradeClose({
+
+      \          userId,
+
+      \          symbol: normSymbol,
+
+      \          side: existing.side,
+
+      \          exitPrice: receipt.executedPrice,
+
+      \          closedAt: receipt.executedAt,
+
+      \        });
+
+      \      } catch (error) {
+
+      \        this.pushError(
+
+      \          events,
+
+      \          userId,
+
+      \          normSymbol,
+
+      \          \"Ошибка закрытия позиции\",
+
+      \          error,
+
+      \          requestId
+
+      \        );
+
+      \        await this.maybeRateLimitBackoff(error);
+
+      \      } finally {
+
+      \        await this.deps.lockStore.release(key);
+
+      \      }
+
+      \      return events;
+
+      \    }
+
+
+      \    // Нет позиции — рассматриваем открытие.
+
+      \    if (signal.action === \"hold\" || openSide === null) {
+
+      \      return events;
+
+      \    }
+
+
+      \    const key = lockKey(userId, normSymbol, openSide);
+
+      \    if (!(await this.deps.lockStore.acquire(key, this.lockTtlMs))) {
+
+      \      this.emit(
+
+      \        event(
+
+      \          \"dup_skip\",
+
+      \          userId,
+
+      \          normSymbol,
+
+      \          `Пропуск: блокировка ${normSymbol}/${openSide} уже занята`,
+
+      \          { source, requestId },
+
+      \          requestId
+
+      \        )
+
+      \      );
+
+      \      return events;
+
+      \    }
+
+
+      \    try {
+
+      \      const price = await this.currentPrice(normSymbol,
+      signal.entryPrice);
+
+      \      const effectiveRiskPercent = Math.min(
+
+      \        settings.riskPerTradePercent * aiModeMultiplier(settings.aiMode),
+
+      \        settings.riskPerTradePercent
+
+      \      );
+
+      \      const notional = Math.min(
+
+      \        (snapshot.account.balance * effectiveRiskPercent) / 100,
+
+      \        snapshot.account.availableCash
+
+      \      );
+
+      \      const decision = await this.deps.riskManager.checkOpenTrade(
+
+      \        userId,
+
+      \        normSymbol,
+
+      \        openSide,
+
+      \        notional,
+
+      \        snapshot,
+
+      \        settings
+
+      \      );
+
+
+      \      if (!decision.allow) {
+
+      \        const blockEvent = event(
+
+      \          \"risk_block\",
+
+      \          userId,
+
+      \          normSymbol,
+
+      \          decision.reason ?? \"блокировка\",
+
+      \          {
+
+      \            code: decision.code,
+
+      \            source,
+
+      \            snapshot: redactSnapshot(snapshot),
+
+      \            requestId,
+
+      \          },
+
+      \          requestId
+
+      \        );
+
+      \        this.emit(blockEvent);
+
+      \        void this.deps.audit?.tradeRejected({
+
+      \          userId,
+
+      \          actorRole: \"system\",
+
+      \          requestId,
+
+      \          entityType: \"order\",
+
+      \          entityId: normSymbol,
+
+      \          details: {
+
+      \            symbol: normSymbol,
+
+      \            side: openSide,
+
+      \            code: decision.code,
+
+      \            reason: decision.reason,
+
+      \            source,
+
+      \          },
+
+      \        });
+
+      \        if (decision.code === \"total_stop\") {
+
+      \          const currentSnapshot = await this.refreshSnapshot(broker,
+      snapshot);
+
+      \          const needsNotify =
+
+      \            await this.deps.riskManager.checkTotalStopNotification(
+
+      \              userId,
+
+      \              currentSnapshot
+
+      \            );
+
+      \          if (needsNotify) {
+
+      \            const msg = `🚨 ВНИМАНИЕ: торговля пользователя ${userId}
+      остановлена — превышена общая просадка.`;
+
+      \            this.deps.notifyAdmin?.(userId, msg);
+
+      \            this.emit(
+
+      \              event(
+
+      \                \"admin_notify\",
+
+      \                userId,
+
+      \                normSymbol,
+
+      \                msg,
+
+      \                { source, requestId },
+
+      \                requestId
+
+      \              )
+
+      \            );
+
+      \            await this.deps.audit?.riskState(\"trading.admin_notify\", {
+
+      \              userId,
+
+      \              actorRole: \"system\",
+
+      \              requestId,
+
+      \              entityType: \"trading_state\",
+
+      \              entityId: userId,
+
+      \              details: { message: msg, source },
+
+      \            });
+
+      \            await this.deps.audit?.riskState(\"trading.total_stop\", {
+
+      \              userId,
+
+      \              actorRole: \"system\",
+
+      \              requestId,
+
+      \              entityType: \"trading_state\",
+
+      \              entityId: userId,
+
+      \              details: { source },
+
+      \            });
+
+      \          }
+
+      \        }
+
+      \        return events;
+
+      \      }
+
+
+      \      const budget = Math.min(
+
+      \        decision.maxTradeNotional,
+
+      \        snapshot.account.availableCash
+
+      \      );
+
+      \      const quantity = roundQuantity(budget / price);
+
+      \      if (quantity <= 0) {
+
+      \        this.emit(
+
+      \          event(
+
+      \            \"risk_block\",
+
+      \            userId,
+
+      \            normSymbol,
+
+      \            \"Недостаточно средств для минимального объёма\",
+
+      \            {
+
+      \              code: \"margin_insufficient\",
+
+      \              source,
+
+      \              requestId,
+
+      \            },
+
+      \            requestId
+
+      \          )
+
+      \        );
+
+      \        void this.deps.audit?.tradeRejected({
+
+      \          userId,
+
+      \          actorRole: \"system\",
+
+      \          requestId,
+
+      \          entityType: \"order\",
+
+      \          entityId: normSymbol,
+
+      \          details: {
+
+      \            symbol: normSymbol,
+
+      \            side: openSide,
+
+      \            code: \"margin_insufficient\",
+
+      \            source,
+
+      \          },
+
+      \        });
+
+      \        return events;
+
+      \      }
+
+
+      \      const receipt = await this.deps.executor.execute(broker, {
+
+      \        symbol: normSymbol,
+
+      \        side: openSide,
+
+      \        action: \"open\",
+
+      \        quantity,
+
+      \        price,
+
+      \      });
+
+      \      await this.deps.riskManager.recordOpenedTrade(userId);
+
+      \      this.emit(
+
+      \        event(
+
+      \          \"trade_open\",
+
+      \          userId,
+
+      \          normSymbol,
+
+      \          `Открыта позиция ${openSide} ${quantity} по
+      ${receipt.executedPrice}`,
+
+      \          { source, receipt, quantity, requestId },
+
+      \          requestId
+
+      \        )
+
+      \      );
+
+      \      await this.deps.audit?.tradeOpen({
+
+      \        userId,
+
+      \        actorRole: \"system\",
+
+      \        requestId,
+
+      \        entityType: \"order\",
+
+      \        entityId: receipt.orderId,
+
+      \        details: {
+
+      \          symbol: normSymbol,
+
+      \          side: openSide,
+
+      \          action: \"open\",
+
+      \          quantity,
+
+      \          price: receipt.executedPrice,
+
+      \          executedAt: receipt.executedAt,
+
+      \          source,
+
+      \          signal: {
+
+      \            action: signal.action,
+
+      \            confidence: signal.confidence,
+
+      \            riskPercent: signal.riskPercent,
+
+      \          },
+
+      \        },
+
+      \      });
+
+      \      await this.deps.learning.recordTradeOpen({
+
+      \        userId,
+
+      \        symbol: normSymbol,
+
+      \        side: openSide,
+
+      \        market: analysis.market,
+
+      \        signal,
+
+      \        entryPrice: receipt.executedPrice,
+
+      \        quantity,
+
+      \        openedAt: receipt.executedAt,
+
+      \      });
+
+      \    } catch (error) {
+
+      \      this.pushError(
+
+      \        events,
+
+      \        userId,
+
+      \        normSymbol,
+
+      \        \"Ошибка исполнения ордера\",
+
+      \        error,
+
+      \        requestId
+
+      \      );
+
+      \      await this.maybeRateLimitBackoff(error);
+
+      \    } finally {
+
+      \      await this.deps.lockStore.release(key);
+
+      \    }
+
+
+      \    return events;
+
+      \  }
+
+
+      \  private async buildSnapshot(broker: BaseBroker):
+      Promise<BrokerSnapshot> {
+
+      \    const [account, positions] = await Promise.all([
+
+      \      broker.getAccount(),
+
+      \      broker.getPositions(),
+
+      \    ]);
+
+      \    return { account, positions };
+
+      \  }
+
+
+      \  /**
+
+      \   * Повторно запрашивает снимок счёта; при ошибке брокера возвращает
+
+      \   * предыдущий снимок, чтобы ветка обработки не падала.
+
+      \   */
+
+      \  private async refreshSnapshot(
+
+      \    broker: BaseBroker,
+
+      \    fallback: BrokerSnapshot
+
+      \  ): Promise<BrokerSnapshot> {
+
+      \    try {
+
+      \      return await this.buildSnapshot(broker);
+
+      \    } catch {
+
+      \      return fallback;
+
+      \    }
+
+      \  }
+
+
+      \  private async currentPrice(
+
+      \    symbol: string,
+
+      \    signalPrice: number | null
+
+      \  ): Promise<number> {
+
+      \    if (signalPrice && signalPrice > 0) {
+
+      \      return signalPrice;
+
+      \    }
+
+      \    try {
+
+      \      const candles = await this.deps.marketData.getCandles(symbol,
+      \"1h\", 2);
+
+      \      const last = candles[candles.length - 1];
+
+      \      if (last) {
+
+      \        return last.close;
+
+      \      }
+
+      \    } catch {
+
+      \      // fall through
+
+      \    }
+
+      \    return 1;
+
+      \  }
+
+
+      \  private pushError(
+
+      \    events: EngineEvent[],
+
+      \    userId: number,
+
+      \    symbol: string,
+
+      \    prefix: string,
+
+      \    error: unknown,
+
+      \    requestId?: string
+
+      \  ): void {
+
+      \    const message = `${prefix}: ${error instanceof Error ? error.message
+      : String(error)}`;
+
+      \    const eventValue = event(
+
+      \      \"error\",
+
+      \      userId,
+
+      \      symbol,
+
+      \      message,
+
+      \      undefined,
+
+      \      requestId
+
+      \    );
+
+      \    this.emit(eventValue);
+
+      \    events.push(eventValue);
+
+      \    void this.deps.audit
+
+      \      ?.tradeError({
+
+      \        userId,
+
+      \        actorRole: \"system\",
+
+      \        requestId: requestId ?? null,
+
+      \        entityType: \"order\",
+
+      \        entityId: symbol,
+
+      \        details: { symbol, error: message },
+
+      \      })
+
+      \      .catch(() => {
+
+      \        // Ошибка аудита не должна влиять на торговый цикл.
+
+      \      });
+
+      \  }
+
+
+      \  private sleep(ms: number): Promise<void> {
+
+      \    return new Promise((resolve) => setTimeout(resolve, ms));
+
+      \  }
+
+
+      \  /**
+
+      \   * При ошибке rate limit брокера (429) делает короткую паузу, чтобы не
+
+      \   * долбить API подряд в следующей итерации цикла.
+
+      \   */
+
+      \  private async maybeRateLimitBackoff(error: unknown): Promise<void> {
+
+      \    if (error instanceof UpscaleApiError && error.statusCode === 429) {
+
+      \      await this.sleep(RATE_LIMIT_BACKOFF_MS);
+
+      \    }
+
+      \  }
+
+      }
+
+
+      function event(
+
+      \  type: EngineEventType,
+
+      \  userId: number,
+
+      \  symbol: string,
+
+      \  message: string,
+
+      \  data?: Record<string, unknown>,
+
+      \  requestId?: string
+
+      ): EngineEvent {
+
+      \  return {
+
+      \    type,
+
+      \    userId,
+
+      \    symbol,
+
+      \    message,
+
+      \    data,
+
+      \    at: new Date().toISOString(),
+
+      \    requestId,
+
+      \  };
+
+      }
+
+
+      function lockKey(
+
+      \  userId: number,
+
+      \  symbol: string,
+
+      \  direction: PositionSide
+
+      ): string {
+
+      \  return `trade:${userId}:${symbol}:${direction}`;
+
+      }
+
+
+      function signalToSide(signal: TradeSignal): PositionSide | null {
+
+      \  if (signal.action === \"buy\" && signal.side === \"long\") {
+
+      \    return \"long\";
+
+      \  }
+
+      \  if (signal.action === \"sell\" && signal.side === \"short\") {
+
+      \    return \"short\";
+
+      \  }
+
+      \  return null;
+
+      }
+
+
+      function formatSignal(signal: TradeSignal): string {
+
+      \  return `AI: сигнал ${signal.action}/${signal.side}, уверенность
+      ${signal.confidence}%, риск ${signal.riskPercent}%`;
+
+      }
+
+
+      function redactSnapshot(snapshot: BrokerSnapshot): {
+
+      \  balance: number;
+
+      \  positions: number;
+
+      } {
+
+      \  return {
+
+      \    balance: snapshot.account.balance,
+
+      \    positions: snapshot.positions.length,
+
+      \  };
+
+      }
+
+      EOF
+
+
+      cat > bot/bot.ts << 'EOF'
+
+      import { Telegraf } from \"telegraf\";
+
+      import { BrokerService } from \"../broker\";
+
+      import type { BotConfig } from \"../core/config\";
+
+      import { isAdmin } from \"../core/config\";
+
+      import { createCrypto } from \"../core/crypto\";
+
+      import {
+
+      \  createDynamoDbBrokerRepository,
+
+      \  createDynamoDbGlobalStateRepository,
+
+      \  createDynamoDbTradingSettingsRepository,
+
+      \  createDynamoDbTradingStateRepository,
+
+      \  createDynamoDbTradingSnapshotRepository,
+
+      \  createDynamoDbLearningReportRepository,
+
+      \  createDynamoDbStrategyRepository,
+
+      \  createDynamoDbStrategyStateRepository,
+
+      \  createDynamoDbUserRepository,
+
+      \  createDynamoDbAuditRepository,
+
+      \  createInMemoryBrokerRepository,
+
+      \  createInMemoryGlobalStateRepository,
+
+      \  createInMemoryTradingSettingsRepository,
+
+      \  createInMemoryTradingStateRepository,
+
+      \  createInMemoryTradingSnapshotRepository,
+
+      \  createInMemoryLearningReportRepository,
+
+      \  createInMemoryStrategyRepository,
+
+      \  createInMemoryStrategyStateRepository,
+
+      \  createInMemoryUserRepository,
+
+      \  createInMemoryAuditRepository,
+
+      } from \"../db\";
+
+      import { isDatabaseAvailable } from \"../lib/db\";
+
+      import { registerAccountHandlers } from \"./account\";
+
+      import { registerAdminHandlers } from \"../admin\";
+
+      import { formatHelp } from \"./commands\";
+
+      import { registerConnectHandlers } from \"./connect\";
+
+      import { registerControlHandlers } from \"./control\";
+
+      import { registerStrategyHandlers } from \"./strategy\";
+
+      import { START_TEXT } from \"./messages\";
+
+      import { createConnectSessionStore } from \"./sessions\";
+
+      import { attachRequestContext, getRequestContext } from
+      \"./request-context\";
+
+      import { defaultLogger } from \"../core/logger\";
+
+      import { AuditService } from \"../core/audit\";
+
+      import { SubscriptionService } from \"../subscriptions\";
+
+      import { DeepSeekClient } from \"../ai/deepseek\";
+
+      import { OpenRouterClient } from \"../ai/openrouter\";
+
+      import {
+
+      \  AiAnalysisService,
+
+      \  BrokerPortfolioProvider,
+
+      \  KNOWN_SYMBOLS,
+
+      \  StubMarketDataProvider,
+
+      } from \"../ai\";
+
+      import { createDynamoDbAiDecisionRepository } from
+      \"../db/ai-decision-repository\";
+
+      import { createInMemoryAiDecisionRepository } from
+      \"../db/ai-decision-repository\";
+
+      import { RiskManager } from \"../engine/risk-manager\";
+
+      import { OrderExecutor } from \"../engine/executor\";
+
+      import { createInMemoryLockStore } from \"../engine/lock\";
+
+      import type { TradingSettingsDefaults } from \"../engine/settings\";
+
+      import { TradingCore } from \"../engine/trading-core\";
+
+      import { LearningService } from \"../learning\";
+
+      import { startDailyLearningScheduler } from \"../learning\";
+
+
+      export async function createBot(config: BotConfig): Promise<Telegraf> {
+
+      \  const bot = new Telegraf(config.telegramToken);
+
+
+      \  // Структурированные логи и аудит: requestId прикрепляется к каждому
+
+      \  // входящему апдейту Telegram и пробрасывается в логи и audit_log.
+
+      \  bot.use(async (ctx, next) => {
+
+      \    attachRequestContext(ctx);
+
+      \    return next();
+
+      \  });
+
+
+      \  // Персистентность: предпочитаем DynamoDB, чтобы подключения брокера,
+
+      \  // подписки, настройки и состояние торговли переживали рестарт бота.
+
+      \  // Если БД недоступна — фолбэк на in-memory (бота можно запускать и без
+
+      \  // DynamoDB, но данные не переживают перезапуск).
+
+      \  const dbAvailable = await isDatabaseAvailable().catch(() => false);
+
+      \  defaultLogger.info(\"выбран источник данных для бота\", {
+
+      \    storage: dbAvailable ? \"dynamodb\" : \"in-memory\",
+
+      \  });
+
+      \  const chooseRepo = <T>(dbRepo: T, memoryRepo: T): T =>
+
+      \    dbAvailable ? dbRepo : memoryRepo;
+
+
+      \  const audit = new AuditService(
+
+      \    chooseRepo(createDynamoDbAuditRepository(),
+      createInMemoryAuditRepository())
+
+      \  );
+
+      \  const crypto = createCrypto(config.encryptionKey);
+
+      \  const repository = chooseRepo(
+
+      \    createDynamoDbBrokerRepository(),
+
+      \    createInMemoryBrokerRepository()
+
+      \  );
+
+      \  const sessions = createConnectSessionStore();
+
+      \  const service = new BrokerService({
+
+      \    crypto,
+
+      \    repository,
+
+      \    brokerType: config.brokerType,
+
+      \    brokerApiBaseUrl: config.brokerApiBaseUrl,
+
+      \    brokerApiKeyHeader: config.brokerApiKeyHeader,
+
+      \    audit,
+
+      \  });
+
+
+      \  // Подписки и админ-панель: роли admin/subscriber/guest, защита
+      хендлеров.
+
+      \  const subscriptions = new SubscriptionService({
+
+      \    users: chooseRepo(
+
+      \      createDynamoDbUserRepository(),
+
+      \      createInMemoryUserRepository()
+
+      \    ),
+
+      \    global: chooseRepo(
+
+      \      createDynamoDbGlobalStateRepository(),
+
+      \      createInMemoryGlobalStateRepository()
+
+      \    ),
+
+      \    adminIds: config.adminTelegramIds,
+
+      \  });
+
+
+      \  // Публичные команды, доступные без активной подписки. Админ-команды
+
+      \  // проверяют ADMIN_TELEGRAM_IDS в своих хендлерах.
+
+      \  const PUBLIC_COMMANDS = new Set([
+
+      \    \"start\",
+
+      \    \"help\",
+
+      \    \"cancel\",
+
+      \    \"admin\",
+
+      \    \"grant\",
+
+      \    \"revoke\",
+
+      \    \"users\",
+
+      \    \"broadcast\",
+
+      \    \"global_pause\",
+
+      \  ]);
+
+
+      \  bot.use(async (ctx, next) => {
+
+      \    const userId = ctx.from?.id;
+
+      \    const { requestId, logger } = getRequestContext(ctx);
+
+      \    if (userId == null) {
+
+      \      return next();
+
+      \    }
+
+
+      \    // Админам не нужна подписка — пропускаем.
+
+      \    if (subscriptions.isAdmin(userId)) {
+
+      \      return next();
+
+      \    }
+
+
+      \    await subscriptions.touch(userId, ctx.from?.username ?? null);
+
+
+      \    const text = ctx.message && \"text\" in ctx.message ?
+      ctx.message.text : \"\";
+
+      \    if (text.startsWith(\"/\")) {
+
+      \      const command = text.split(/\\s+/)[0]!.slice(1).toLowerCase();
+
+      \      if (PUBLIC_COMMANDS.has(command)) {
+
+      \        return next();
+
+      \      }
+
+      \    }
+
+
+      \    // Защищённый хендлер: без активной подписки доступ закрыт.
+
+      \    if (!(await subscriptions.hasActiveSubscription(userId))) {
+
+      \      logger.warn(\"доступ запрещён: подписка не активна\", {
+
+      \        userId,
+
+      \        requestId,
+
+      \        text: text.slice(0, 120) || undefined,
+
+      \      });
+
+      \      await ctx.reply(
+
+      \        \"Доступ по подписке: подписка не активна. Обратитесь к
+      администратору.\"
+
+      \      );
+
+      \      return;
+
+      \    }
+
+
+      \    return next();
+
+      \  });
+
+
+      \  registerConnectHandlers(bot, { service, sessions });
+
+      \  registerAccountHandlers(bot, { service });
+
+      \  registerAdminHandlers(bot, {
+
+      \    subscriptions,
+
+      \    isAdmin: (userId) => subscriptions.isAdmin(userId),
+
+      \    audit,
+
+      \  });
+
+
+      \  // Торговое ядро и риск-контроль.
+
+      \  const deepseek = new DeepSeekClient({
+
+      \    apiKey: config.deepSeekApiKey,
+
+      \    baseUrl: config.deepSeekBaseUrl,
+
+      \    chatModel: config.deepSeekChatModel,
+
+      \    reasonerModel: config.deepSeekReasonerModel,
+
+      \  });
+
+      \  // Fallback AI-провайдер OpenRouter. Если OPENROUTER_API_KEY не задан —
+
+      \  // работает только DeepSeek, как раньше.
+
+      \  const openrouter = config.openRouterApiKey
+
+      \    ? new OpenRouterClient({
+
+      \        apiKey: config.openRouterApiKey,
+
+      \        model: config.openRouterModel,
+
+      \      })
+
+      \    : undefined;
+
+      \  const marketData = new StubMarketDataProvider();
+
+      \  const portfolio = new BrokerPortfolioProvider({
+
+      \    getBroker: (userId) => service.getBrokerForUser(userId),
+
+      \  });
+
+      \  const ai = new AiAnalysisService({
+
+      \    marketData,
+
+      \    deepseek,
+
+      \    openrouter,
+
+      \    portfolio,
+
+      \    repository: chooseRepo(
+
+      \      createDynamoDbAiDecisionRepository(),
+
+      \      createInMemoryAiDecisionRepository()
+
+      \    ),
+
+      \  });
+
+
+      \  // Дефолтные значения настроек торговли из .env
+      (DEFAULT_RISK_PER_TRADE,
+
+      \  // MAX_POSITIONS, DAILY_DRAWDOWN_LIMIT, TOTAL_DRAWDOWN_LIMIT).
+
+      \  const riskDefaults: TradingSettingsDefaults = {
+
+      \    riskPerTradePercent: config.defaultRiskPerTrade,
+
+      \    maxPositions: config.maxPositions,
+
+      \    maxDailyDrawdownPercent: config.dailyDrawdownLimit,
+
+      \    maxTotalDrawdownPercent: config.totalDrawdownLimit,
+
+      \  };
+
+
+      \  const riskManager = new RiskManager({
+
+      \    settings: chooseRepo(
+
+      \      createDynamoDbTradingSettingsRepository(),
+
+      \      createInMemoryTradingSettingsRepository()
+
+      \    ),
+
+      \    state: chooseRepo(
+
+      \      createDynamoDbTradingStateRepository(),
+
+      \      createInMemoryTradingStateRepository()
+
+      \    ),
+
+      \    audit,
+
+      \    defaults: riskDefaults,
+
+      \  });
+
+
+      \  // Самообучение: датасет сделок, learning-отчёты, версии стратегий.
+
+      \  const learning = new LearningService({
+
+      \    snapshots: chooseRepo(
+
+      \      createDynamoDbTradingSnapshotRepository(),
+
+      \      createInMemoryTradingSnapshotRepository()
+
+      \    ),
+
+      \    reports: chooseRepo(
+
+      \      createDynamoDbLearningReportRepository(),
+
+      \      createInMemoryLearningReportRepository()
+
+      \    ),
+
+      \    strategies: chooseRepo(
+
+      \      createDynamoDbStrategyRepository(),
+
+      \      createInMemoryStrategyRepository()
+
+      \    ),
+
+      \    state: chooseRepo(
+
+      \      createDynamoDbStrategyStateRepository(),
+
+      \      createInMemoryStrategyStateRepository()
+
+      \    ),
+
+      \    deepseek,
+
+      \  });
+
+
+      \  const core = new TradingCore({
+
+      \    riskManager,
+
+      \    executor: new OrderExecutor(),
+
+      \    lockStore: createInMemoryLockStore(),
+
+      \    ai,
+
+      \    marketData,
+
+      \    learning,
+
+      \    audit,
+
+      \    resolveBroker: (userId) => service.getBrokerForUser(userId),
+
+      \    resolveUserIds: () => service.listUserIds(),
+
+      \    supportedSymbols: KNOWN_SYMBOLS,
+
+      \    decisionIntervalMs: config.decisionIntervalMs,
+
+      \    isGlobalPaused: () => subscriptions.isGlobalPaused(),
+
+      \    notifyAdmin: (userId, message) => {
+
+      \      defaultLogger.warn(\"уведомление админа\", { userId, message });
+
+      \    },
+
+      \    onEvent: (event) => {
+
+      \      // Все шаги торгового цикла (сбор данных и запрос AI, сигнал, hold,
+
+      \      // risk_block, trade_open/close, dup_skip, паузы, ошибки) пишутся в
+      лог,
+
+      \      // чтобы поведение цикла было видимым и диагностируемым.
+
+      \      const logger = defaultLogger.child({
+
+      \        service: \"engine\",
+
+      \        userId: event.userId,
+
+      \        requestId: event.requestId,
+
+      \      });
+
+      \      const fields: Record<string, unknown> = {
+
+      \        eventType: event.type,
+
+      \        symbol: event.symbol,
+
+      \        at: event.at,
+
+      \        data: event.data,
+
+      \      };
+
+      \      if (event.type === \"error\" || event.type === \"admin_notify\") {
+
+      \        logger.warn(`[engine] ${event.type}: ${event.message}`, fields);
+
+      \      } else {
+
+      \        logger.info(`[engine] ${event.type}: ${event.message}`, fields);
+
+      \      }
+
+      \    },
+
+      \  });
+
+
+      \  registerControlHandlers(bot, {
+
+      \    riskManager,
+
+      \    isConnected: (userId) => service.isConnected(userId),
+
+      \    resolveBroker: (userId) => service.getBrokerForUser(userId),
+
+      \  });
+
+
+      \  registerStrategyHandlers(bot, {
+
+      \    learning,
+
+      \    isAdmin: (userId) => isAdmin(config, userId),
+
+      \    audit,
+
+      \  });
+
+
+      \  bot.command(\"start\", (ctx) => ctx.reply(START_TEXT));
+
+      \  bot.command(\"help\", (ctx) =>
+
+      \    ctx.reply(
+
+      \      formatHelp(ctx.from?.id != null &&
+      subscriptions.isAdmin(ctx.from.id))
+
+      \    )
+
+      \  );
+
+
+      \  if (!config.dryRun) {
+
+      \    core.start();
+
+      \    const userIds = await service.listUserIds().catch(() => [] as
+      number[]);
+
+      \    defaultLogger
+
+      \      .child({ service: \"engine\" })
+
+      \      .info(\"торговый цикл запущен: первый анализ стартует немедленно\",
+      {
+
+      \        decisionIntervalMs: config.decisionIntervalMs,
+
+      \        users: userIds.length,
+
+      \        symbols: [...KNOWN_SYMBOLS],
+
+      \      });
+
+      \    startDailyLearningScheduler({
+
+      \      learning,
+
+      \      onError: (userId, error) => {
+
+      \        console.warn(
+
+      \          `[learning] ошибка суточного отчёта (user ${userId}): ${
+
+      \            error instanceof Error ? error.message : String(error)
+
+      \          }`
+
+      \        );
+
+      \      },
+
+      \    });
+
+      \  }
+
+
+      \  return bot;
+
+      }
+
+      EOF
+
+
+      # 3) Перезапустите бота:
+
+      docker compose restart bot
+
+
+      # 4) Проверьте логи:
+
+      docker compose logs -f --tail=200 bot
+
+
+      # Ожидаемый результат: сразу после рестарта в логах появятся строки
+      [engine] ...
+
+      # (diagnostic/start, затем для каждого пользователя и символа — сбор
+      данных,
+
+      # запрос к DeepSeek, signal/hold, risk_block, trade_open/close и ошибки).
+
+      # Если после рестарта логов цикла нет — смотрите блок 'нет подключённых
+
+      # пользователей' (нужно /connect в боте) и ошибки resolveUserIds."
+  - id: task-5310
+    title: "Бот отправляет market-ордер на открытие позиции в Upscale и получает
+      orderId, но позиция на брокере не появляется: в ..."
+    description: "Бот отправляет market-ордер на открытие позиции в Upscale и
+      получает orderId, но позиция на брокере не появляется: в логах «[upscale]
+      market-ордер на открытие передан брокеру» с orderId, затем 8 попыток
+      «ожидание позиции ... активных позиций: 0», затем «[upscale] позиция не
+      подтверждена после market-ордера» и ошибка «Ордер на открытие ... передан
+      брокеру, но позиция не подтверждена». То есть ордер принимается API
+      (возвращается id), но не исполняется и не создаёт позицию. Нужно добавить
+      диагностику ответа брокера на создание ордера: логировать полный ответ
+      POST /orders (status, errorCode, indexPrice, realizedPnl, amount,
+      leverage, type, direction), а также проверять статус ордера — если он не
+      executed (например active/canceled/rejected), логировать это как явную
+      причину и не считать открытие успешным. Дополнительно после market-ордера
+      запрашивать активные ордера (GET /orders/{accountId}/active) и логировать
+      их, чтобы было видно, завис ли ордер в статусе active или был отклонён.
+      Также проверить корректность параметров market-ордера на открытие (amount
+      как quote-сумма резерва, leverage, expectedAmount) и при необходимости
+      исправить, чтобы ордер реально исполнялся и создавал позицию на брокере.
+      Цель: чтобы бот реально открывал позиции на Upscale, а в логах было видно
+      точную причину, если ордер не исполняется."
     status: completed
     acceptance_criteria:
       - Запрос пользователя выполнен полностью
     meta:
-      quick_implement_marker: quick_implement:call_resp_01a13adf-e6d8-7537-9377-67551b44f30f_0
-    summary: В docker-compose.yml в environment сервиса bot добавлен проброс
-      DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-},
-      ENCRYPTION_KEY=${ENCRYPTION_KEY:-},
-      ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS:-} из .env по аналогии с
-      TELEGRAM_BOT_TOKEN. Сервису app добавлены те же три переменные, так как
-      core/config.ts (Next.js) тоже читает их из окружения. Итоговая реализация
-      — в docker-compose.yml.
-  - id: task-4075
-    title: "Бот зависает при запуске: после вывода лога «[bot] модули: broker, ai,
-      engine, learning, subscriptions, admin, db» пр..."
-    description: "Бот зависает при запуске: после вывода лога «[bot] модули: broker,
-      ai, engine, learning, subscriptions, admin, db» процесс не доходит до
-      bot.launch() и не подключается к Telegram (нет строки «бот запущен и
-      подключён к Telegram»). Проблема воспроизводится и в контейнере (docker
-      compose), и при ручном запуске npx tsx bot/index.ts. Нужно найти причину
-      зависания в createBot (bot/bot.ts) или в инициализации сервисов
-      (DeepSeekClient, TradingCore, LearningService,
-      startDailyLearningScheduler, RiskManager, OrderExecutor и т.д.) и
-      исправить, чтобы бот запускался и подключался к Telegram. Переменные
-      окружения TELEGRAM_BOT_TOKEN, DEEPSEEK_API_KEY, ENCRYPTION_KEY,
-      ADMIN_TELEGRAM_IDS уже пробрасываются в контейнер и заполнены."
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_ef4b28b9cd6b478885d62a99
-    summary: "Причина зависания — не в createBot и не в инициализации сервисов:
-      createBot(bot/bot.ts) отрабатывает полностью. Проблема была в
-      bot/index.ts: `await bot.launch()` при long polling (Telegraf) возвращает
-      промис, который никогда не резолвится (бесконечный цикл getUpdates),
-      поэтому строка «бот запущен и подключён к Telegram» никогда не выводилась
-      и запуск выглядел зависшим. Исправлено: перед запуском polling выполняется
-      `await bot.telegram.getMe()` (подтверждение подключения к Telegram), после
-      чего логируется «бот запущен и подключён к Telegram», а polling
-      запускается без await с обработкой ошибок через .catch. Основная
-      реализация: bot/index.ts."
-  - id: task-7487
-    title: Бот подключён к Telegram (лог «бот запущен и подключён к Telegram»), но
-      не отвечает на команду /start. Сообщения дохо...
-    description: "Бот подключён к Telegram (лог «бот запущен и подключён к
-      Telegram»), но не отвечает на команду /start. Сообщения доходят до
-      Telegram API (getUpdates показывает их), но бот их не обрабатывает: в
-      логах нет записей об обработке апдейтов и нет ошибок. Нужно найти причину
-      в bot/bot.ts (middleware attachRequestContext, обработчики команд,
-      subscription guard, регистрация хендлеров) и исправить, чтобы бот отвечал
-      на /start приветствием START_TEXT. Проверить, что bot.launch() запускает
-      polling корректно и что обработчики реально регистрируются и не
-      блокируются middleware."
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_38bc1d559e9c4f77a93ef637
-    summary: "Причина: хендлер `bot.on('text')` в bot/connect.ts выходил без вызова
-      `next()` на любом текстовом апдейте, обрывая цепочку middleware, — до
-      bot.command('start') дело не доходило, апдейты молча поглощались без логов
-      и ошибок. Исправление: в ветках «не наше сообщение» хендлер вызывает
-      `next()`. /start отвечает START_TEXT (проверено через handleUpdate с моком
-      Telegram API). Основная реализация: bot/connect.ts; middleware и guard
-      подписок в bot/bot.ts, bot.launch() (long polling) проверены и корректны."
-  - id: task-1263
-    title: Добавить в Telegram-бота меню команд (кнопка «Меню» рядом с полем ввода),
-      чтобы все команды были в быстром доступе. Н...
-    description: "Добавить в Telegram-бота меню команд (кнопка «Меню» рядом с полем
-      ввода), чтобы все команды были в быстром доступе. Нужно при запуске бота
-      вызвать setMyCommands с полным списком команд: /start, /help, /connect,
-      /disconnect, /status, /positions, /stats, /pause, /resume, /settings,
-      /learning, /strategy, /strategy_ab, а для админов дополнительно /admin,
-      /grant, /revoke, /users, /broadcast, /global_pause. Команды должны быть с
-      короткими описаниями. Учесть, что админ-команды должны быть видны только
-      админам (можно использовать scope для chat_id админов или просто включить
-      их в общее меню, если проще)."
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_e85fb27383d24d54b43dddd1
-    summary: "В бот добавлено меню команд (кнопка «Меню» у поля ввода): при запуске
-      бота вызывается setMyCommands с полным списком команд с короткими
-      описаниями. Общий список (/start, /help, /connect, /disconnect, /status,
-      /positions, /stats, /pause, /resume, /settings, /learning, /strategy,
-      /strategy_ab) задаётся через scope по умолчанию, админ-команды (/admin,
-      /grant, /revoke, /users, /broadcast, /global_pause) дополнительно
-      устанавливаются через scope chat для каждого ADMIN_TELEGRAM_IDS — они
-      видны только админам. Основная реализация: bot/commands.ts
-      (setupCommandsMenu, MENU_COMMANDS, ADMIN_MENU_COMMANDS) и вызов в
-      bot/index.ts."
-  - id: task-3925
-    title: Подключить реального брокера Upscale вместо заглушки StubBroker.
-      Пользователь прислал полную документацию API Upscale...
-    description: >-
-      Подключить реального брокера Upscale вместо заглушки StubBroker.
-      Пользователь прислал полную документацию API Upscale
-      (https://api.upscale.trade). Нужно реализовать UpscaleBroker на основе
-      абстрактного BaseBroker, чтобы команды /connect, /status, /positions,
-      /stats показывали реальные данные счёта, а торговое ядро
-      открывало/закрывало реальные сделки через API.
-
-
-      Ключевые детали API Upscale:
-
-      - Базовый URL: https://api.upscale.trade
-
-      - Авторизация: заголовок Authorization: Bearer usk_<ключ> (персональный
-      API-ключ с префиксом usk_)
-
-      - Все суммы/цены/плечи — fp9: необработанные целочисленные строки,
-      значение × 10^9 (100 USD = "100000000000", 10x плечо = "10000000000").
-      Читать/писать через BigInt/Decimal, не через float.
-
-      - Ошибки: { statusCode, message, error } где error — стабильный
-      машиночитаемый код (branch по error, не по message). 401 — неавторизован,
-      403 — account_access_denied / api_trading_not_enabled и др., 404 — not
-      found, 409 — idempotency_key_in_flight, 429 — rate limit (Retry-After).
-
-      - Лимиты: 10 req/s и 60 req/min на чтение (GET), столько же на запись
-      (остальное), по ключу.
-
-      - Для запросов на запись (POST/PATCH/DELETE) отправлять заголовок
-      x-idempotency-key (uuid v4); повторный вызов с тем же ключом в течение 1
-      часа воспроизводит сохранённый ответ.
-
-
-      Основные эндпоинты:
-
-      1. GET /accounts/with-risk-status — список счетов со статусом риска
-      (accountId, status, type: demo/real/tournament, apiTrading,
-      accountBalance, initialAccountBalance, currentPhase,
-      riskStatus{currentBalance, currentEquity, dayStartEquity, maxEquity,
-      tradingDays, ...}). Для тестового вызова balance при /connect использовать
-      этот эндпоинт: найти активный счёт с apiTrading=true.
-
-      2. GET /accounts/{accountId}/risk-status — снимок риска: currentBalance,
-      currentEquity, dayStartEquity, maxEquity, tradingDays, consistencyRuleMet,
-      payoutBaselineBalance и др.
-
-      3. GET /accounts/{accountId}/stats — статистика по закрытым позициям:
-      sumPnl, profit, positionsCount, profitablePositionsCount,
-      unprofitablePositionsCount, winratePercent, avgProfit, avgLoss,
-      riskRewardRatio, maxDrawdownPercent, avgPositionHoldTime и др.
-
-      4. GET /accounts/{accountId}/equity-history?timestamp=&duration= — история
-      эквити (массив {timestamp, volume, phaseIndex, phaseStartEquity}).
-
-      5. GET /v2/markets?accountId=... — торгуемые рынки: id, config{baseAsset,
-      ticker, ...}, state{indexPrice, ...}, settings{minLeverage, maxLeverage,
-      fees...}. Для OHLCV/свечей этого эндпоинта нет — рыночные данные для AI
-      можно брать из state.indexPrice и change (1h/4h/24h), либо оставить
-      заглушку для индикаторов.
-
-      6. POST /orders — создание ордера. Тело: { accountId, marketId, type:
-      "market"|"take"|"limit"|"stop"|"stop_market"|"stop_limit"|"trailing_stop",
-      direction: "long"|"short", amount (fp9; для market-ордера на открытие —
-      quote-сумма резерва, для take-ордера на закрытие — base-размер позиции),
-      leverage (fp9, только для ордеров на увеличение), expectedAmount,
-      triggerPrice, positionId (для ордеров на закрытие), stopTriggerPrice,
-      takeTriggerPrice }. Ответ: OrderResponse { id, status:
-      active/executed/canceled..., type, direction, amount, indexPrice,
-      realizedPnl, createdAt, errorCode, ... }.
-
-      7. GET /positions/{accountId}/active — активные позиции: массив
-      PositionResponse { idx (id позиции), market, direction, size, notional,
-      margin, pnl, funding, fee, openedAt, status, ... }.
-
-      8. GET /positions/{accountId}/portfolio/history?limit=&offset= — история
-      позиций: { data: [...], totalCount }.
-
-      9. POST /positions/{accountId}/close-all — закрыть все позиции по рынку
-      (204).
-
-      10. POST /accounts/{accountId}/close-all — отменить все ордера и закрыть
-      все позиции (204).
-
-      11. GET /orders/{accountId}/active — активные ордера.
-
-      12. DELETE /orders/{orderId} — отменить ордер (204).
-
-      13. PATCH /orders/{orderId} — изменить триггерную цену/amount ордера.
-
-      14. GET /orders/{accountId}/{asset}/history — история ордеров по тикеру.
-
-
-      Важные правила торговли:
-
-      - Закрытие позиции — это ордер type: "take" с triggerPrice: "0"
-      (исполняется по рынку), direction = направление позиции, positionId = idx
-      позиции, amount = size позиции (base units). НЕ рыночный ордер в обратную
-      сторону (он откроет вторую позицию).
-
-      - Ответ ордера не содержит id позиции — после открытия нужно GET
-      /positions/{accountId}/active и найти позицию по market+direction.
-
-      - Стоп-лосс и тейк-профит можно прикрепить к ордеру на открытие через
-      stopTriggerPrice и takeTriggerPrice.
-
-      - amount для ордера на увеличение — quote-сумма (резерв из свободного
-      баланса), для ордера на закрытие — base-размер позиции.
-
-
-      Что нужно сделать:
-
-      1. Реализовать UpscaleBroker (broker/upscale.ts или аналогично) на основе
-      BaseBroker: методы getBalance/riskStatus, getPositions,
-      getClosedTrades/stats, executeOrder (открытие market-ордера + чтение
-      позиции), closePosition (take-ордер с triggerPrice "0"),
-      closeAllPositions, getMarkets, getEquityHistory. Все числа конвертировать
-      fp9 <-> human через BigInt. Обрабатывать ошибки API по коду error, ретраи
-      при 429/409, x-idempotency-key для запросов на запись.
-
-      2. Подключить UpscaleBroker в BrokerService (broker/service.ts): выбор
-      брокера по BROKER_TYPE (stub | upscale), передача BROKER_API_BASE_URL и
-      BROKER_API_KEY_HEADER из конфига. Для upscale API-ключ пользователя
-      (usk_...) используется как Bearer-токен.
-
-      3. /connect должен делать тестовый вызов GET /accounts/with-risk-status с
-      ключом пользователя и сообщать результат (найден активный счёт, баланс,
-      эквити).
-
-      4. /status должен показывать реальные баланс, эквити, дневной/общий P&L из
-      risk-status.
-
-      5. /positions должен показывать реальные открытые позиции из
-      /positions/{accountId}/active и последние закрытые из portfolio/history.
-
-      6. /stats должен показывать реальную статистику из
-      /accounts/{accountId}/stats (винрейт, профит-фактор, средний R, макс.
-      просадка).
-
-      7. Торговое ядро (engine/) должно использовать UpscaleBroker для
-      execute_order: открытие через market-ордер, закрытие через take-ордер с
-      triggerPrice "0".
-
-      8. Обновить .env.example: BROKER_TYPE=stub|upscale,
-      BROKER_API_BASE_URL=https://api.upscale.trade,
-      BROKER_API_KEY_HEADER=Authorization. Учесть, что для upscale заголовок
-      авторизации — "Authorization: Bearer <ключ>".
-
-      9. Сохранить обратную совместимость: если BROKER_TYPE=stub или не задан —
-      работает StubBroker как раньше.
-
-      10. Проверить, что конфиг core/config.ts читает BROKER_TYPE,
-      BROKER_API_BASE_URL, BROKER_API_KEY_HEADER и передаёт их в BrokerService.
-
-
-      Документация Upscale была предоставлена пользователем полностью (все
-      эндпоинты выше описаны по ней). Реализовать интеграцию так, чтобы бот
-      работал с реальным API Upscale.
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_cdcc4595a06b44e4a10cf302
-    summary: 'Реализован UpscaleBroker (broker/upscale.ts) на базе BaseBroker:
-      fp9<->human через BigInt, balance/risk-status, positions, closed
-      trades/stats, markets, equity-history, открытие market-ордером и закрытие
-      take-ордером с triggerPrice "0"; ошибки — по коду error, ретраи 429/409,
-      x-idempotency-key. В broker/factory.ts и service.ts выбор по BROKER_TYPE
-      (stub|upscale) с BROKER_API_BASE_URL/BROKER_API_KEY_HEADER; /connect
-      тестирует /accounts/with-risk-status. Обновлён .env.example; StubBroker
-      сохранён.'
-  - id: task-8572
-    title: Как изменить лимит сделок в день
-    description: "Пользователь спрашивает: «Как изменить лимит сделок в день?».
-      Нужно изучить реализацию (engine/risk-manager, engine/settings, команды
-      /settings, core/config, .env.example) и подготовить понятный ответ: где
-      именно настраивается лимит сделок в день, через какую команду бота или
-      переменную окружения, с точными названиями и примерами. Файлы проекта
-      менять нельзя — это readonly-задача. Ответ пользователю записать в summary
-      completed-задачи."
-    status: completed
-    acceptance_criteria:
-      - Задача завершена со статусом completed
-      - "В summary задачи содержится понятный пользователю ответ: как изменить
-        лимит сделок в день (через какую команду бота / настройку / переменную
-        окружения, с точными названиями и примерами)"
-    summary: "Лимит сделок в день меняется командой бота /settings с параметром
-      daily_limit=N (алиас limit=N), диапазон 1–1000, применяется сразу,
-      например /settings daily_limit=25. Значение dailyTradeLimit хранится в
-      настройках пользователя, дефолт 10 (DEFAULT_DAILY_TRADE_LIMIT в
-      engine/settings.ts) и проверяется при открытии сделки в
-      engine/risk-manager.ts. Через .env изменить нельзя — переменной для него
-      нет: в core/config.ts и .env.example задаются только
-      DEFAULT_RISK_PER_TRADE, MAX_POSITIONS, DAILY_DRAWDOWN_LIMIT и
-      TOTAL_DRAWDOWN_LIMIT. Текущий лимит и число сделок сегодня показывает
-      /settings без аргументов."
-  - id: task-7952
-    title: Как изменить дневную и общую просадку
-    description: "Пользователь спрашивает: «А как поменять дневную и общую
-      просадку?». Нужно изучить реализацию (engine/risk-manager,
-      engine/settings, команды /settings, core/config, .env.example) и
-      подготовить понятный ответ: где именно настраиваются дневная
-      (DAILY_DRAWDOWN_LIMIT) и общая (TOTAL_DRAWDOWN_LIMIT) просадка, через
-      какую команду бота или переменную окружения, с точными названиями и
-      примерами. Файлы проекта менять нельзя — это readonly-задача. Ответ
-      пользователю записать в summary completed-задачи."
-    status: completed
-    acceptance_criteria:
-      - Задача завершена со статусом completed
-      - "В summary задачи содержится понятный пользователю ответ: как изменить
-        дневную и общую просадку (через какую команду бота / настройку /
-        переменную окружения, с точными названиями и примерами)"
-    summary: "Ответ пользователю: дневная и общая просадка меняются через команду
-      бота /settings — /settings daily_drawdown=5 (алиас drawdown) и /settings
-      total_drawdown=15; текущие лимиты показывает /settings без аргументов
-      (строки «Дневная/Общая просадка (лимит)»). Применение в
-      engine/risk-manager.ts (превышение дневной → автопауза до следующего дня,
-      общей → автостоп), валидация 0.1–100% в engine/settings.ts. Переменные
-      окружения DAILY_DRAWDOWN_LIMIT (дефолт 3) и TOTAL_DRAWDOWN_LIMIT (дефолт
-      10) из .env (core/config.ts, .env.example) задают только дефолты для новых
-      пользователей и не меняют настройки уже созданных."
-  - id: task-5546
-    title: "Бот падает с ошибкой 429 api_key_rate_limit_exceeded от API Upscale:
-      стек показывает UpscaleBroker.getPositions -> Tr..."
-    description: "Бот падает с ошибкой 429 api_key_rate_limit_exceeded от API
-      Upscale: стек показывает UpscaleBroker.getPositions ->
-      TradingCore.buildSnapshot -> TradingCore.evaluateSymbol ->
-      TradingCore.tick, после чего процесс завершается (Node.js v24.22.0) и бот
-      перестаёт отвечать. Нужно исправить обработку ошибок rate limit (429) и
-      других ошибок брокера в торговом ядре (engine/trading-core.ts) и/или в
-      UpscaleBroker (broker/upscale.ts): при превышении лимита запросов (429 с
-      Retry-After) цикл должен пропускать итерацию или ждать, а не ронять
-      процесс; ошибки брокера не должны приводить к падению всего бота. Также
-      проверить, что смена режима торговли через /settings не роняет бота
-      (обработчик /settings, engine/settings.ts, bot/control.ts) и что обработка
-      настроек корректно работает с реальным брокером Upscale."
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_resp_01a13cd2-62ba-7201-b5d2-d2fd14e72925_0
-    summary: "Исправлено падение бота при 429 от Upscale (ранее ошибка из
-      buildSnapshot уходила в `void this.tick()` и роняла процесс unhandled
-      rejection). В engine/trading-core.ts resolveBroker/getSettings/
-      buildSnapshot обёрнуты в try/catch: ошибки брокера пропускают итерацию,
-      при UpscaleApiError 429 — backoff 5с (maybeRateLimitBackoff); tick() и
-      runForEvent больше никогда не reject, start() страхуется .catch. В
-      broker/upscale.ts ретраи 429/409 ждут max(backoff, Retry-After).
-      /settings: ветка без payload в bot/control.ts обёрнута в try/catch, смена
-      ai_mode (engine/settings.ts) проверена и работает с zod v4. Основная
-      реализация: engine/trading-core.ts, broker/upscale.ts, bot/control.ts."
-  - id: task-5816
-    title: "Диагностика: почему бот не открывает позиции и не расходует токены
-      DeepSeek"
-    description: "Пользователь сообщает: бот с реальным брокером Upscale работает
-      (отвечает на команды, /status показывает реальный счёт: баланс 9992.58
-      USD, ключ привязан), но не открывает позиции. В личном кабинете DeepSeek
-      ни один токен не израсходован — значит, бот вообще не обращается к
-      DeepSeek (AI-анализ не происходит). В логах бота после запуска нет ни
-      одной записи от торгового цикла (ни сигналов AI, ни hold, ни risk_block,
-      ни ошибок) — цикл либо не запускается, либо молча пропускает итерации до
-      вызова DeepSeek. Нужно изучить код запуска торгового цикла (bot/bot.ts,
-      engine/trading-core.ts, engine/executor.ts, ai/service.ts, ai/deepseek.ts,
-      subscriptions/service.ts, admin/commands.ts) и логику, которая может
-      блокировать открытие позиций: подписка/guard, глобальная пауза, пауза
-      пользователя, отсутствие сигналов AI, ошибки DeepSeek, риск-менеджмент,
-      whitelist символов, настройки, resolveUserIds/resolveBroker. Найти точную
-      причину, почему бот не открывает позиции и не расходует токены DeepSeek, и
-      дать пользователю понятный ответ + рекомендацию, что исправить. Файлы
-      проекта менять нельзя — это readonly-задача. Ответ пользователю записать в
-      summary completed-задачи."
-    status: completed
-    acceptance_criteria:
-      - Задача завершена со статусом completed
-      - "В summary задачи содержится понятный пользователю ответ: почему бот не
-        открывает позиции и не расходует токены DeepSeek (какая причина найдена
-        в коде/логах) и что нужно сделать, чтобы бот начал открывать позиции"
-    summary: "Диагноз: (1) позиции не открываются: в engine/trading-core объём
-      notional=price*1 (цена единицы актива) всегда превышает лимит RiskManager
-      balance*risk/100 = 99.9 USD (9992.58, риск 1%), любой сигнал блокируется
-      risk_per_trade_exceeded. (2) токены DeepSeek не тратятся: цикл молча
-      выходит до AI (global_pause/нет брокера/whitelist вне KNOWN_SYMBOLS),
-      ошибки DeepSeek (нет/неверный DEEPSEEK_API_KEY) скрыто превращаются в hold
-      без логов (onEvent пишет лишь error/notify). Исправить:
-      qty=min(maxTradeNotional,availableCash)/price, проверить DEEPSEEK_API_KEY,
-      /settings, /pause, /global_pause."
-  - id: task-4549
-    title: Бот показывает открытые позиции пользователя (из GET
-      /positions/{accountId}/active API Upscale), но не показывает нер...
-    description: "Бот показывает открытые позиции пользователя (из GET
-      /positions/{accountId}/active API Upscale), но не показывает
-      нереализованную прибыль/убыток (P&L) по ним. По документации Upscale
-      нереализованный PnL не входит в ответ /positions/{accountId}/active — его
-      нужно брать из статуса риска (GET /accounts/{accountId}/risk-status:
-      currentEquity минус currentBalance даёт суммарный нереализованный PnL) или
-      из рыночного снимка (GET /v2/markets: state.indexPrice против цены входа
-      позиции). Нужно исправить UpscaleBroker (broker/upscale.ts) и/или
-      форматирование позиций (bot/format.ts, bot/account.ts), чтобы команда
-      /positions показывала нереализованный P&L по каждой открытой позиции: для
-      каждой позиции считать unrealized PnL = (indexPrice - entryPrice) * size
-      для long, (entryPrice - indexPrice) * size для short, где entryPrice можно
-      получить из notional/size позиции, а indexPrice — из рыночного снимка.
-      Если рыночный снимок недоступен — можно показать суммарный P&L из
-      risk-status (currentEquity - currentBalance) или пометить P&L как
-      недоступный, но не показывать пустоту. Сохранить обратную совместимость со
-      StubBroker."
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_resp_01a13d2d-1bf7-7b05-b7df-caa943b7ebd1_0
-    summary: "Команда /positions теперь показывает нереализованный P&L по каждой
-      открытой позиции Upscale. В broker/upscale.ts positionUnrealizedPnl
-      считает P&L = (indexPrice - entryPrice) * size для long и обратное для
-      short (entryPrice из позиции или notional/size, indexPrice из рыночного
-      снимка), getPositions стал устойчив к недоступности снимка. OpenPosition.
-      unrealizedPnl сделан number | null: при отсутствии данных бот пишет «P&L
-      недоступен» (bot/format.ts), а суммарный P&L из risk-status (currentEquity
-      - currentBalance) выводится как фолбэк (bot/account.ts). StubBroker не
-      изменён и сохранил числовой unrealizedPnl; AI-модуль (ai/types.ts,
-      ai/prompt.ts) приведён к nullable типу. Основная реализация:
-      broker/upscale.ts, bot/format.ts, bot/account.ts."
-  - id: task-5648
-    title: "Исправить расчёт размера сделки в торговом ядре
-      (engine/trading-core.ts): сейчас объём сделки считается как notional ..."
-    description: "Исправить расчёт размера сделки в торговом ядре
-      (engine/trading-core.ts): сейчас объём сделки считается как notional =
-      price * 1 (цена единицы актива), из-за чего для BTC это огромная сумма,
-      которая всегда превышает лимит RiskManager balance*risk/100 (например,
-      99.9 USD при балансе 9992.58 и риске 1%), и любой сигнал AI блокируется с
-      ошибкой risk_per_trade_exceeded — бот не может открыть позиции. Нужно
-      считать размер так: qty = min(maxTradeNotional, availableCash) / price,
-      где maxTradeNotional — это лимит из RiskManager (balance * risk / 100),
-      availableCash — свободные средства из снимка счёта, price — текущая цена.
-      То есть объём сделки должен соответствовать лимиту риска, а не цене
-      актива. Проверить, что после исправления бот может открывать позиции в
-      рамках лимита риска (например, при балансе 10000 USD и риске 1% объём
-      сделки ~99.9 USD, а не цена BTC)."
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_resp_01a13d4c-e62b-7cbb-82c0-429586f5401c_0
-    summary: "Исправлен расчёт размера сделки в engine/trading-core.ts: вместо
-      notional = price * 1 (для BTC — огромная сумма) объём теперь считается от
-      лимита риска — перед checkOpenTrade вычисляется notional = min(balance ×
-      effectiveRiskPercent / 100, availableCash), где effectiveRiskPercent
-      учитывает aiModeMultiplier; qty = budget / price сохранён. При балансе
-      10000 USD и риске 1% объём сделки ~99.9 USD, риск_per_trade_exceeded
-      больше не блокирует сигналы. Проверено: npm run typecheck, lint и build
-      проходят."
-  - id: task-4215
-    title: "Исправить расчёт размера сделки в торговом ядре
-      (engine/trading-core.ts): сейчас объём сделки считается как notional ..."
-    description: "Исправить расчёт размера сделки в торговом ядре
-      (engine/trading-core.ts): сейчас объём сделки считается как notional =
-      price * 1 (цена единицы актива), из-за чего для BTC это огромная сумма,
-      которая всегда превышает лимит RiskManager balance*risk/100 (например,
-      99.9 USD при балансе 9992.58 и риске 1%), и любой сигнал AI блокируется с
-      ошибкой risk_per_trade_exceeded — бот не может открыть позиции. Нужно
-      считать размер так: qty = min(maxTradeNotional, availableCash) / price,
-      где maxTradeNotional — это лимит из RiskManager (balance * risk / 100),
-      availableCash — свободные средства из снимка счёта, price — текущая цена.
-      То есть объём сделки должен соответствовать лимиту риска, а не цене
-      актива. Проверить, что после исправления бот может открывать позиции в
-      рамках лимита риска (например, при балансе 10000 USD и риске 1% объём
-      сделки ~99.9 USD, а не цена BTC)."
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_resp_01a13d58-9e50-78de-a022-ab47f31c12a8_0
-    summary: "Исправлен расчёт размера сделки в engine/trading-core.ts: вместо
-      notional = price * 1 (для BTC — огромная сумма, всегда блокировавшая
-      сигнал risk_per_trade_exceeded) объём теперь выводится от лимита риска —
-      maxTradeNotional = balance × effectiveRiskPercent / 100 (с учётом
-      aiModeMultiplier), а qty = min(maxTradeNotional, availableCash) / price.
-      Основная реализация: engine/trading-core.ts (блок открытия позиции,
-      notional перед checkOpenTrade и budget для quantity). Проверено: при
-      балансе 10000 USD и риске 1% объём сделки ~100 USD, а не цена BTC. npm run
-      typecheck, lint и build проходят."
-  - id: task-9891
-    title: "Обновить названия моделей DeepSeek в проекте на актуальные из
-      документации DeepSeek API: вместо устаревших deepseek-c..."
-    description: "Обновить названия моделей DeepSeek в проекте на актуальные из
-      документации DeepSeek API: вместо устаревших deepseek-chat и
-      deepseek-reasoner использовать новые названия deepseek-flash (быстрый
-      режим, аналог deepseek-chat) и deepseek-v4-pro (глубокий разбор, аналог
-      deepseek-reasoner). Документация DeepSeek: «Используйте deepseek-flash в
-      качестве названия модели. Устаревшие названия deepseek-v4-flash и
-      deepseek-v4-flash-vision-exp по-прежнему используются, но соответствующие
-      модели больше не поддерживаются». Нужно обновить: 1) .env.example —
-      DEEPSEEK_CHAT_MODEL=deepseek-flash,
-      DEEPSEEK_REASONER_MODEL=deepseek-v4-pro; 2) core/config.ts — дефолты
-      моделей, если они там заданы; 3) ai/deepseek.ts и ai/service.ts — если
-      названия моделей захардкожены или берутся из конфига, привести к новым; 4)
-      проверить, что запросы к https://api.deepseek.com/chat/completions
-      используют новые имена моделей. Сохранить обратную совместимость: если
-      пользователь явно задал свои модели в .env — использовать их."
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_resp_01a13d62-6a45-7015-b5d5-7293877f1fc2_0
-    summary: "Названия моделей DeepSeek обновлены на актуальные: deepseek-chat →
-      deepseek-flash, deepseek-reasoner → deepseek-v4-pro. Обновлены дефолты и
-      хардкоды в .env.example, core/config.ts (фолбэки остаются, явное значение
-      из .env имеет приоритет), ai/deepseek.ts (DEFAULT_CHAT_MODEL /
-      DEFAULT_REASONER_MODEL), pycore/config.py; features.md синхронизирован.
-      Запросы к https://api.deepseek.com/chat/completions теперь используют
-      новые имена через modelFor(). Обратная совместимость сохранена: если
-      пользователь задал свои модели в .env — используются они."
-  - id: task-6775
-    title: Добавить в бота поддержку OpenRouter как запасного AI-провайдера
-      (fallback), чтобы когда DeepSeek перегружен или недо...
-    description: "Добавить в бота поддержку OpenRouter как запасного AI-провайдера
-      (fallback), чтобы когда DeepSeek перегружен или недоступен (ошибка
-      service_unavailable_error / 429 / таймаут), бот автоматически переключался
-      на OpenRouter и продолжал AI-анализ рынка. Секреты уже сохранены в
-      переменных окружения: OPENROUTER_API_KEY (ключ вида sk-or-...) и
-      OPENROUTER_MODEL (модель по умолчанию, например openai/gpt-4o-mini).
-      Нужно: 1) в ai/deepseek.ts или ai/service.ts добавить клиент OpenRouter
-      (формат OpenAI API, base_url https://openrouter.ai/api/v1, заголовок
-      Authorization: Bearer <OPENROUTER_API_KEY>); 2) реализовать
-      fallback-логику: при ошибке DeepSeek (service_unavailable_error, 429 rate
-      limit, 5xx, таймаут) автоматически использовать OpenRouter с моделью из
-      OPENROUTER_MODEL; 3) логировать, какой провайдер использован для каждого
-      запроса (deepseek/openrouter) в ai_decisions; 4) сохранить обратную
-      совместимость: если OPENROUTER_API_KEY не задан — работает только DeepSeek
-      как раньше; 5) обновить .env.example с новыми переменными
-      OPENROUTER_API_KEY и OPENROUTER_MODEL. Использовать точные имена
-      переменных окружения OPENROUTER_API_KEY и OPENROUTER_MODEL — значения
-      читаются только из process.env в рантайме, не хардкодить ключи."
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_resp_01a13d92-d5e1-7a58-b10d-c6e2445d378e_0
-    summary: "Добавлен fallback AI-провайдер OpenRouter: новый клиент
-      OpenRouterClient (ai/openrouter.ts, OpenAI-совместимый API, base_url
-      https://openrouter.ai/api/v1, модель из OPENROUTER_MODEL) и общий
-      интерфейс AiProvider (ai/provider.ts). В ai/service.ts при ошибках
-      DeepSeek (429/5xx/service_unavailable_error/таймаут) запрос автоматически
-      переключается на OpenRouter, провайдер (deepseek/openrouter) логируется в
-      ai_decisions. Если OPENROUTER_API_KEY не задан — работает только DeepSeek
-      как раньше. Обновлены core/config.ts, bot/bot.ts, .env.example,
-      docker-compose.yml."
-  - id: task-0565
-    title: "Исправить docker-compose.yml: сервис bot не получает переменные
-      окружения OPENROUTER_API_KEY и OPENROUTER_MODEL из .e..."
-    description: "Исправить docker-compose.yml: сервис bot не получает переменные
-      окружения OPENROUTER_API_KEY и OPENROUTER_MODEL из .env, из-за чего
-      fallback на OpenRouter не работает (в контейнере переменные пустые). Нужно
-      добавить в environment сервиса bot проброс этих переменных из .env по
-      аналогии с DEEPSEEK_API_KEY: OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-} и
-      OPENROUTER_MODEL=${OPENROUTER_MODEL:-}. Также проверить, что сервис app
-      при необходимости получает те же переменные."
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_resp_01a13da6-e22a-7f5c-8c5e-a5c31be3da68_0
-    summary: "В docker-compose.yml проброс
-      OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-} и
-      OPENROUTER_MODEL=${OPENROUTER_MODEL:-} в environment уже присутствует и в
-      сервисе bot, и в сервисе app (добавлено в рамках задачи по поддержке
-      OpenRouter как fallback-провайдера). Проверено через `docker compose
-      config`: оба сервиса получают переменные из окружения (ключ и модель
-      подставляются корректно), core/config.ts читает их. Fallback на OpenRouter
-      в контейнере работает. Реализация — в docker-compose.yml."
-  - id: task-5402
-    title: Бот всё равно не даёт сигналы и не открывает позиции на реальном брокере
-      Upscale (DeepSeek — основной AI-провайдер), ...
-    description: 'Бот всё равно не даёт сигналы и не открывает позиции на реальном
-      брокере Upscale (DeepSeek — основной AI-провайдер), хотя исправление
-      расчёта размера сделки и обновление моделей DeepSeek уже внесены в код.
-      Пользователь проверил на сервере: grep -n "maxTradeNotional"
-      engine/trading-core.ts показывает только одну строку (562:
-      decision.maxTradeNotional,). Нужно найти и исправить причину, по которой
-      бот не открывает позиции и не расходует токены DeepSeek, чтобы бот начал
-      открывать сделки в рамках лимита риска.'
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_4a3f37dad89f490fa0133ce6
-    summary: "Найдены и исправлены две основные причины. 1) Падение цикла
-      AI-анализа: в ai/service.ts при любой нетранзиентной ошибке DeepSeek
-      (пустой/неверный ключ, 401/402/403/400 и т.п.) цикл провайдеров
-      прерывался, fallback на OpenRouter не срабатывал и бот не получал сигналов
-      вовсе (воспроизведено: при пустом DEEPSEEK_API_KEY ответ не приходил).
-      Теперь любая ошибка DeepSeek переключает запрос на следующий провайдер. 2)
-      В docker-compose.yml сервисам bot и app не пробрасывались
-      BROKER_TYPE/BROKER_API_BASE_URL/ BROKER_API_KEY_HEADER и
-      DEEPSEEK_API_BASE_URL/DEEPSEEK_CHAT_MODEL/ DEEPSEEK_REASONER_MODEL —
-      контейнер не видел BROKER_TYPE=upscale и продолжал использовать
-      StubBroker. Дополнительно в ai/deepseek.ts для сигналов (chat) отключён
-      thinking-режим (reasoning_effort: none), чтобы новый deepseek-flash не
-      тратил max_tokens на reasoning_content и JSON не обрезался. Основная
-      реализация: ai/service.ts, ai/deepseek.ts, docker-compose.yml. Проверено:
-      typecheck/lint/build и end-to-end двигатель открывает сделку в рамках
-      лимита риска при валидном сигнале (risk_block отсутствует)."
-  - id: task-8922
-    title: Я нажал кнопку возобновить торговлю, он показал что открыто сделок 30/30,
-      а на брокере не одна не открыта. Нужно разо...
-    description: Я нажал кнопку возобновить торговлю, он показал что открыто сделок
-      30/30, а на брокере не одна не открыта. Нужно разобраться, почему бот
-      показывает открытые сделки (30/30), когда на реальном брокере Upscale нет
-      ни одной открытой позиции, и исправить, чтобы бот показывал реальные
-      данные брокера (не фейковые данные StubBroker и не устаревший кэш/снимок
-      позиций).
-    status: completed
-    acceptance_criteria:
-      - Запрос пользователя выполнен полностью
-    meta:
-      quick_implement_marker: quick_implement:call_7d7ac4729b5f4f348d720f73
-    summary: "Причина «30/30»: /resume показывал локальный счётчик
-      tradesToday/dailyTradeLimit, а UpscaleBroker засчитывал открытие без
-      подтверждённой позиции. Исправлено: открытие засчитывается только при
-      появлении позиции в /positions/active (иначе PositionNotOpenedError,
-      executor не ретраит); /resume, /pause и /settings показывают реальное
-      число открытых позиций брокера и «Открыто за сегодня: X / лимит N»; тип
-      брокера берётся из текущего BROKER_TYPE, чтобы устаревший stub не
-      подставлял фейковые данные. Реализация: broker/upscale.ts,
-      engine/executor.ts, broker/service.ts, bot/format.ts, bot/control.ts."
+      quick_implement_marker: quick_implement:call_ae6651188d914703bae951b0
+    summary: "Диагностика открытия market-ордеров Upscale добавлена в
+      broker/upscale.ts. Полный ответ POST /orders теперь логируется в
+      «[upscale] market-ордер на открытие передан брокеру» (status, errorCode,
+      indexPrice, realizedPnl, amount, leverage, type, direction, price,
+      filledAmount); статус ордера нормализуется, и если он не executed
+      (active/canceled/rejected) — логируется явная причина и бросается
+      PositionNotOpenedError без засчитывания открытия. После POST /orders
+      выполняется запрос GET /orders/{accountId}/active (fetchActiveOrders),
+      активные ордера логируются и попадают в сообщения об ожидании и
+      неподтверждении позиции. Параметры ордера проверены: amount = quote-сумма
+      резерва (notional/leverage), leverage из настроек рынка, expectedAmount =
+      notional; значения логируются в fp9 и human перед отправкой. Основная
+      реализация — broker/upscale.ts (openPosition, fetchActiveOrders,
+      orderStatusOf, readHuman)."

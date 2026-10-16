@@ -36,7 +36,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const bot = createBot(config);
+  const bot = await createBot(config);
 
   await bot.telegram.getMe();
   await setupCommandsMenu(bot, config.adminTelegramIds);

@@ -4,6 +4,16 @@ import type { BotConfig } from "../core/config";
 import { isAdmin } from "../core/config";
 import { createCrypto } from "../core/crypto";
 import {
+  createDynamoDbBrokerRepository,
+  createDynamoDbGlobalStateRepository,
+  createDynamoDbTradingSettingsRepository,
+  createDynamoDbTradingStateRepository,
+  createDynamoDbTradingSnapshotRepository,
+  createDynamoDbLearningReportRepository,
+  createDynamoDbStrategyRepository,
+  createDynamoDbStrategyStateRepository,
+  createDynamoDbUserRepository,
+  createDynamoDbAuditRepository,
   createInMemoryBrokerRepository,
   createInMemoryGlobalStateRepository,
   createInMemoryTradingSettingsRepository,
@@ -15,6 +25,7 @@ import {
   createInMemoryUserRepository,
   createInMemoryAuditRepository,
 } from "../db";
+import { isDatabaseAvailable } from "../lib/db";
 import { registerAccountHandlers } from "./account";
 import { registerAdminHandlers } from "../admin";
 import { formatHelp } from "./commands";
@@ -35,6 +46,7 @@ import {
   KNOWN_SYMBOLS,
   StubMarketDataProvider,
 } from "../ai";
+import { createDynamoDbAiDecisionRepository } from "../db/ai-decision-repository";
 import { createInMemoryAiDecisionRepository } from "../db/ai-decision-repository";
 import { RiskManager } from "../engine/risk-manager";
 import { OrderExecutor } from "../engine/executor";
@@ -44,7 +56,7 @@ import { TradingCore } from "../engine/trading-core";
 import { LearningService } from "../learning";
 import { startDailyLearningScheduler } from "../learning";
 
-export function createBot(config: BotConfig): Telegraf {
+export async function createBot(config: BotConfig): Promise<Telegraf> {
   const bot = new Telegraf(config.telegramToken);
 
   // Структурированные логи и аудит: requestId прикрепляется к каждому
@@ -54,9 +66,25 @@ export function createBot(config: BotConfig): Telegraf {
     return next();
   });
 
-  const audit = new AuditService(createInMemoryAuditRepository());
+  // Персистентность: предпочитаем DynamoDB, чтобы подключения брокера,
+  // подписки, настройки и состояние торговли переживали рестарт бота.
+  // Если БД недоступна — фолбэк на in-memory (бота можно запускать и без
+  // DynamoDB, но данные не переживают перезапуск).
+  const dbAvailable = await isDatabaseAvailable().catch(() => false);
+  defaultLogger.info("выбран источник данных для бота", {
+    storage: dbAvailable ? "dynamodb" : "in-memory",
+  });
+  const chooseRepo = <T>(dbRepo: T, memoryRepo: T): T =>
+    dbAvailable ? dbRepo : memoryRepo;
+
+  const audit = new AuditService(
+    chooseRepo(createDynamoDbAuditRepository(), createInMemoryAuditRepository())
+  );
   const crypto = createCrypto(config.encryptionKey);
-  const repository = createInMemoryBrokerRepository();
+  const repository = chooseRepo(
+    createDynamoDbBrokerRepository(),
+    createInMemoryBrokerRepository()
+  );
   const sessions = createConnectSessionStore();
   const service = new BrokerService({
     crypto,
@@ -69,8 +97,14 @@ export function createBot(config: BotConfig): Telegraf {
 
   // Подписки и админ-панель: роли admin/subscriber/guest, защита хендлеров.
   const subscriptions = new SubscriptionService({
-    users: createInMemoryUserRepository(),
-    global: createInMemoryGlobalStateRepository(),
+    users: chooseRepo(
+      createDynamoDbUserRepository(),
+      createInMemoryUserRepository()
+    ),
+    global: chooseRepo(
+      createDynamoDbGlobalStateRepository(),
+      createInMemoryGlobalStateRepository()
+    ),
     adminIds: config.adminTelegramIds,
   });
 
@@ -158,7 +192,10 @@ export function createBot(config: BotConfig): Telegraf {
     deepseek,
     openrouter,
     portfolio,
-    repository: createInMemoryAiDecisionRepository(),
+    repository: chooseRepo(
+      createDynamoDbAiDecisionRepository(),
+      createInMemoryAiDecisionRepository()
+    ),
   });
 
   // Дефолтные значения настроек торговли из .env (DEFAULT_RISK_PER_TRADE,
@@ -171,18 +208,36 @@ export function createBot(config: BotConfig): Telegraf {
   };
 
   const riskManager = new RiskManager({
-    settings: createInMemoryTradingSettingsRepository(),
-    state: createInMemoryTradingStateRepository(),
+    settings: chooseRepo(
+      createDynamoDbTradingSettingsRepository(),
+      createInMemoryTradingSettingsRepository()
+    ),
+    state: chooseRepo(
+      createDynamoDbTradingStateRepository(),
+      createInMemoryTradingStateRepository()
+    ),
     audit,
     defaults: riskDefaults,
   });
 
   // Самообучение: датасет сделок, learning-отчёты, версии стратегий.
   const learning = new LearningService({
-    snapshots: createInMemoryTradingSnapshotRepository(),
-    reports: createInMemoryLearningReportRepository(),
-    strategies: createInMemoryStrategyRepository(),
-    state: createInMemoryStrategyStateRepository(),
+    snapshots: chooseRepo(
+      createDynamoDbTradingSnapshotRepository(),
+      createInMemoryTradingSnapshotRepository()
+    ),
+    reports: chooseRepo(
+      createDynamoDbLearningReportRepository(),
+      createInMemoryLearningReportRepository()
+    ),
+    strategies: chooseRepo(
+      createDynamoDbStrategyRepository(),
+      createInMemoryStrategyRepository()
+    ),
+    state: chooseRepo(
+      createDynamoDbStrategyStateRepository(),
+      createInMemoryStrategyStateRepository()
+    ),
     deepseek,
   });
 
@@ -203,10 +258,24 @@ export function createBot(config: BotConfig): Telegraf {
       defaultLogger.warn("уведомление админа", { userId, message });
     },
     onEvent: (event) => {
+      // Все шаги торгового цикла (сбор данных и запрос AI, сигнал, hold,
+      // risk_block, trade_open/close, dup_skip, паузы, ошибки) пишутся в лог,
+      // чтобы поведение цикла было видимым и диагностируемым.
+      const logger = defaultLogger.child({
+        service: "engine",
+        userId: event.userId,
+        requestId: event.requestId,
+      });
+      const fields: Record<string, unknown> = {
+        eventType: event.type,
+        symbol: event.symbol,
+        at: event.at,
+        data: event.data,
+      };
       if (event.type === "error" || event.type === "admin_notify") {
-        defaultLogger
-          .child({ userId: event.userId, requestId: event.requestId })
-          .warn(`[engine] ${event.type}: ${event.message}`);
+        logger.warn(`[engine] ${event.type}: ${event.message}`, fields);
+      } else {
+        logger.info(`[engine] ${event.type}: ${event.message}`, fields);
       }
     },
   });
@@ -232,6 +301,14 @@ export function createBot(config: BotConfig): Telegraf {
 
   if (!config.dryRun) {
     core.start();
+    const userIds = await service.listUserIds().catch(() => [] as number[]);
+    defaultLogger
+      .child({ service: "engine" })
+      .info("торговый цикл запущен: первый анализ стартует немедленно", {
+        decisionIntervalMs: config.decisionIntervalMs,
+        users: userIds.length,
+        symbols: [...KNOWN_SYMBOLS],
+      });
     startDailyLearningScheduler({
       learning,
       onError: (userId, error) => {

@@ -28,7 +28,8 @@ export type EngineEventType =
   | "dup_skip"
   | "admin_notify"
   | "pause_changed"
-  | "error";
+  | "error"
+  | "diagnostic";
 
 export interface EngineEvent {
   type: EngineEventType;
@@ -98,6 +99,25 @@ export class TradingCore {
       return;
     }
     this.running = true;
+    this.emit(
+      event(
+        "diagnostic",
+        0,
+        "",
+        `торговый цикл запущен: интервал ${this.decisionIntervalMs} мс`,
+        {
+          decisionIntervalMs: this.decisionIntervalMs,
+          lockTtlMs: this.lockTtlMs,
+          symbols: this.supportedSymbols,
+        },
+        createRequestId()
+      )
+    );
+    // Первый тик выполняем сразу после старта, а не дожидаясь первого
+    // интервала (по умолчанию 5 минут): иначе после перезапуска бота, пока
+    // дойдёт первый tick, торговый цикл молчит, и в логах видны только строки
+    // запуска.
+    void this.tick().catch((error) => this.onTickFatal(error));
     this.timer = setInterval(() => {
       void this.tick().catch((error) => this.onTickFatal(error));
     }, this.decisionIntervalMs);
@@ -139,10 +159,41 @@ export class TradingCore {
 
   /** Полный цикл решений по таймеру для всех пользователей и символов. */
   async tick(): Promise<void> {
+    const requestId = createRequestId();
     let userIds: number[];
     try {
       userIds = await this.deps.resolveUserIds();
-    } catch {
+    } catch (error) {
+      // Если БД/репозиторий подключений недоступен — цикл не должен молча
+      // пропускать итерацию: пишем ошибку, чтобы причина была видна в логах.
+      this.emit(
+        event(
+          "error",
+          0,
+          "",
+          `Ошибка чтения списка подключённых пользователей: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          { source: "timer" },
+          requestId
+        )
+      );
+      return;
+    }
+
+    if (userIds.length === 0) {
+      // Самая частая причина «пустых» логов: боту не для кого торговать.
+      // Пишем диагностику, чтобы это было очевидно, а не молчанием.
+      this.emit(
+        event(
+          "diagnostic",
+          0,
+          "",
+          "торговый цикл: нет подключённых пользователей (выполните /connect в боте)",
+          { source: "timer" },
+          requestId
+        )
+      );
       return;
     }
 
@@ -160,7 +211,22 @@ export class TradingCore {
               error instanceof Error ? error.message : String(error)
             }`,
             { source: "timer" },
-            createRequestId()
+            requestId
+          )
+        );
+        continue;
+      }
+      if (symbols.length === 0) {
+        // Тихая ветка: пользователь есть, но whitelist не совпадает ни с
+        // одним поддерживаемым символом. Раньше цикл молча ничего не делал.
+        this.emit(
+          event(
+            "diagnostic",
+            userId,
+            "",
+            "торговый цикл: у пользователя нет символов для торговли (whitelist не пересекается с поддерживаемыми)",
+            { source: "timer" },
+            requestId
           )
         );
         continue;
@@ -178,7 +244,7 @@ export class TradingCore {
                 error instanceof Error ? error.message : String(error)
               }`,
               { source: "timer" },
-              createRequestId()
+              requestId
             )
           );
         }
@@ -204,7 +270,19 @@ export class TradingCore {
     let userIds: number[];
     try {
       userIds = await this.deps.resolveUserIds();
-    } catch {
+    } catch (error) {
+      this.emit(
+        event(
+          "error",
+          0,
+          symbol,
+          `Ошибка чтения списка подключённых пользователей: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          { source },
+          createRequestId()
+        )
+      );
       return;
     }
     for (const userId of userIds) {
@@ -259,6 +337,16 @@ export class TradingCore {
 
     // Глобальная пауза админом (/global_pause) останавливает торговлю у всех.
     if (await this.deps.isGlobalPaused?.()) {
+      this.emit(
+        event(
+          "diagnostic",
+          userId,
+          normSymbol,
+          "пропуск: глобальная пауза (/global_pause)",
+          { source },
+          requestId
+        )
+      );
       return events;
     }
 
@@ -278,6 +366,16 @@ export class TradingCore {
     }
 
     if (!broker) {
+      this.emit(
+        event(
+          "diagnostic",
+          userId,
+          normSymbol,
+          "пропуск: брокер не подключён (выполните /connect)",
+          { source },
+          requestId
+        )
+      );
       return events;
     }
 
@@ -296,6 +394,16 @@ export class TradingCore {
       return events;
     }
     if (!isSymbolAllowed(settings, normSymbol)) {
+      this.emit(
+        event(
+          "diagnostic",
+          userId,
+          normSymbol,
+          "пропуск: символ не разрешён настройками (/settings symbols=...)",
+          { source },
+          requestId
+        )
+      );
       return events;
     }
 
@@ -320,6 +428,16 @@ export class TradingCore {
       (position) => position.symbol.toUpperCase() === normSymbol
     );
 
+    this.emit(
+      event(
+        "diagnostic",
+        userId,
+        normSymbol,
+        "AI-анализ: сбор рыночных данных и запрос к DeepSeek",
+        { source, requestId },
+        requestId
+      )
+    );
     let analysis: AnalyzeResult<TradeSignal>;
     try {
       analysis = await this.deps.ai.analyzeSignal({

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { defaultLogger } from "../core/logger";
 import {
   BaseBroker,
   BrokerConnectionError,
@@ -121,10 +122,37 @@ interface UpscalePosition {
 
 interface UpscaleOrderResponse {
   id?: string | number;
+  orderId?: string | number;
   status?: string;
-  indexPrice?: string;
-  createdAt?: string | number;
+  error?: string;
+  errorType?: string;
   errorCode?: string;
+  indexPrice?: string | number;
+  realizedPnl?: string | number;
+  amount?: string | number;
+  leverage?: string | number;
+  type?: string;
+  direction?: string;
+  price?: string | number;
+  filledAmount?: string | number;
+  createdAt?: string | number;
+}
+
+interface UpscaleActiveOrder {
+  id?: string | number;
+  orderId?: string | number;
+  marketId?: string | number;
+  market?: unknown;
+  status?: string;
+  type?: string;
+  direction?: string;
+  amount?: number | null;
+  filledAmount?: number | null;
+  leverage?: number | null;
+  price?: number | null;
+  indexPrice?: number | null;
+  errorCode?: string;
+  createdAt?: string | number;
 }
 
 export interface BrokerMarket {
@@ -515,6 +543,16 @@ export class UpscaleBroker extends BaseBroker {
     }
     const marketId = String(market.id ?? "");
 
+    defaultLogger
+      .child({ service: "broker" })
+      .info(`[upscale] ордер: ${order.action} ${order.symbol} ${order.side}`, {
+        orderAction: order.action,
+        symbol: order.symbol,
+        side: order.side,
+        accountId,
+        marketId,
+      });
+
     if (order.action === "open") {
       return this.openPosition(accountId, market, marketId, order);
     }
@@ -544,21 +582,136 @@ export class UpscaleBroker extends BaseBroker {
     }
     // amount для market-ордера на открытие — quote-сумма резерва (маржа).
     const amount = notional / leverage;
+    const amountFp9 = toFp9(amount);
+    const leverageFp9 = toFp9(leverage);
+    const expectedAmountFp9 = toFp9(notional);
+
+    defaultLogger
+      .child({ service: "broker" })
+      .debug(`[upscale] параметры market-ордера на открытие`, {
+        symbol: order.symbol,
+        side: direction,
+        marketId,
+        quantity: order.quantity,
+        price,
+        notional,
+        amount,
+        leverage,
+        amountFp9,
+        leverageFp9,
+        expectedAmountFp9,
+      });
 
     const response = await this.createOrder({
       accountId,
       marketId,
       type: "market",
       direction,
-      amount: toFp9(amount),
-      leverage: toFp9(leverage),
-      expectedAmount: toFp9(notional),
+      amount: amountFp9,
+      leverage: leverageFp9,
+      expectedAmount: expectedAmountFp9,
     });
 
-    const position = await this.waitForPosition(accountId, marketId, direction);
+    const orderStatus = this.orderStatusOf(response);
+    const responseInfo = {
+      orderId: String(response.id ?? response.orderId ?? "?"),
+      status: orderStatus,
+      errorCode: response.errorCode ?? response.error ?? null,
+      indexPrice: this.readHuman(response.indexPrice),
+      realizedPnl: this.readHuman(response.realizedPnl),
+      amount: this.readHuman(response.amount),
+      leverage: this.readHuman(response.leverage),
+      type: response.type ?? response.errorType ?? null,
+      direction: response.direction ?? null,
+      price: this.readHuman(response.price),
+      filledAmount: this.readHuman(response.filledAmount),
+      createdAt: response.createdAt ?? null,
+    };
+
+    defaultLogger
+      .child({ service: "broker" })
+      .info(`[upscale] market-ордер на открытие передан брокеру`, {
+        symbol: order.symbol,
+        side: direction,
+        marketId,
+        notional,
+        amount,
+        leverage,
+        price,
+        response: responseInfo,
+      });
+
+    // Диагностика: после POST /orders смотрим активные ордера счёта, чтобы
+    // увидеть, завис ли наш ордер в статусе active или был отклонён.
+    let activeOrders: UpscaleActiveOrder[] = [];
+    try {
+      activeOrders = await this.fetchActiveOrders(accountId);
+    } catch (error) {
+      defaultLogger
+        .child({ service: "broker" })
+        .warn(
+          `[upscale] не удалось получить активные ордера после market-ордера`,
+          {
+            symbol: order.symbol,
+            orderId: String(response.id ?? response.orderId ?? "?"),
+            error: errorMessage(error),
+          }
+        );
+    }
+
+    if (orderStatus !== "executed") {
+      const reason =
+        orderStatus === "active" || orderStatus === "pending"
+          ? `ордер завис в статусе ${orderStatus} и не исполнился`
+          : orderStatus === "canceled" || orderStatus === "cancelled"
+            ? "ордер был отменён брокером"
+            : orderStatus === "rejected"
+              ? "ордер отклонён брокером"
+              : `неожиданный статус ордера: ${orderStatus || "не указан"}`;
+      defaultLogger
+        .child({ service: "broker" })
+        .error(`[upscale] market-ордер не исполнен: ${reason}`, {
+          symbol: order.symbol,
+          side: direction,
+          marketId,
+          orderId: String(response.id ?? response.orderId ?? "?"),
+          status: orderStatus,
+          errorCode: response.errorCode ?? response.error ?? null,
+          activeOrders,
+          response: responseInfo,
+        });
+      throw new PositionNotOpenedError(
+        `Ордер на открытие ${order.symbol} ${direction} принят брокером, но не исполнен (id=${response.id ?? "?"}): ${reason}${response.errorCode ? `, errorCode=${response.errorCode}` : ""}. Позиция не создана.`
+      );
+    }
+
+    if (activeOrders.length > 0) {
+      defaultLogger
+        .child({ service: "broker" })
+        .info(`[upscale] активные ордера после market-ордера`, {
+          symbol: order.symbol,
+          orderId: String(response.id ?? response.orderId ?? "?"),
+          activeOrders,
+        });
+    }
+
+    const position = await this.waitForPosition(accountId, market, direction, {
+      activeOrders,
+    });
     if (!position) {
       // Не засчитываем открытие, которого нет на брокере: иначе движок
       // покажет «сделок открыто 30/30», а на брокере не будет ни одной позиции.
+      defaultLogger
+        .child({ service: "broker" })
+        .warn(`[upscale] позиция не подтверждена после market-ордера`, {
+          symbol: order.symbol,
+          side: direction,
+          marketId,
+          orderId: String(response.id ?? "?"),
+          attempts: POSITION_LOOKUP_ATTEMPTS,
+          status: orderStatus,
+          activeOrders,
+        });
       throw new PositionNotOpenedError(
         `Ордер на открытие ${order.symbol} ${direction} передан брокеру (id=${response.id ?? "?"}), но позиция не подтверждена: после ${POSITION_LOOKUP_ATTEMPTS} опросов активных позиций её нет. Проверьте счёт на брокере — ордер мог не исполниться.`
       );
@@ -588,7 +741,7 @@ export class UpscaleBroker extends BaseBroker {
     const positions = await this.fetchActivePositions(accountId);
     const position = positions.find(
       (item) =>
-        String(item.market ?? "") === marketId &&
+        this.matchesMarket(item, market) &&
         this.normalizeDirection(item.direction) === direction
     );
     if (!position) {
@@ -639,24 +792,85 @@ export class UpscaleBroker extends BaseBroker {
 
   private async waitForPosition(
     accountId: string,
-    marketId: string,
-    direction: PositionSide
+    market: UpscaleMarket,
+    direction: PositionSide,
+    options: { activeOrders?: UpscaleActiveOrder[] } = {}
   ): Promise<UpscalePosition | null> {
+    const marketId = String(market.id ?? "");
     for (let attempt = 1; attempt <= POSITION_LOOKUP_ATTEMPTS; attempt += 1) {
       const positions = await this.fetchActivePositions(accountId);
       const match = positions.find(
         (item) =>
-          String(item.market ?? "") === marketId &&
+          this.matchesMarket(item, market) &&
           this.normalizeDirection(item.direction) === direction
       );
       if (match) {
+        defaultLogger
+          .child({ service: "broker", accountId })
+          .info(
+            `[upscale] позиция подтверждена: marketId=${marketId} ${direction} (попытка ${attempt}/${POSITION_LOOKUP_ATTEMPTS})`,
+            {
+              marketId,
+              direction,
+              attempt,
+              openPositions: positions.length,
+            }
+          );
         return match;
       }
+      defaultLogger
+        .child({ service: "broker", accountId })
+        .debug(
+          `[upscale] ожидание позиции: marketId=${marketId} ${direction} — активных позиций: ${positions.length} (попытка ${attempt}/${POSITION_LOOKUP_ATTEMPTS})`,
+          {
+            marketId,
+            positionMarkets: positions.map((item) =>
+              this.positionMarketIdOf(item)
+            ),
+            activeOrders: options.activeOrders ?? [],
+          }
+        );
       if (attempt < POSITION_LOOKUP_ATTEMPTS) {
         await this.sleep(POSITION_LOOKUP_DELAY_MS);
       }
     }
     return null;
+  }
+
+  /**
+   * Нормализованный статус ордера из ответа POST /orders. Вероятные значения
+   * API: executed / active / canceled / rejected (и производные filled/pending).
+   */
+  private orderStatusOf(response: UpscaleOrderResponse): string {
+    const raw = response.status?.trim().toLowerCase() ?? "";
+    if (!raw) {
+      return "";
+    }
+    switch (raw) {
+      case "executed":
+      case "filled":
+        return "executed";
+      case "active":
+      case "pending":
+        return "active";
+      case "canceled":
+      case "cancelled":
+        return "canceled";
+      case "rejected":
+      case "failed":
+        return "rejected";
+      default:
+        return raw;
+    }
+  }
+
+  /** Значение fp9 -> human (для логирования); отсутствующие поля = null. */
+  private readHuman(value: unknown): number | null {
+    if (value === undefined || value === null || value === "") {
+      return null;
+    }
+    const parsed = fromFp9(value);
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   private positionEntryPrice(
@@ -834,6 +1048,62 @@ export class UpscaleBroker extends BaseBroker {
     return null;
   }
 
+  /**
+   * Идентификатор рынка позиции. Поле `market` в /positions/.../active —
+   * это объект рынка (id/config/ticker), строка с id рынка или число; здесь
+   * извлечён нормализованный id рынка для сравнения.
+   */
+  private positionMarketIdOf(position: UpscalePosition): string {
+    const raw = position.market;
+    if (raw !== null && typeof raw === "object") {
+      const object = raw as UpscaleMarket;
+      const id = readString(asRecord(object), "id", "marketId");
+      if (id) {
+        return normalizeSymbol(id);
+      }
+      const ticker = readString(asRecord(object.config), "ticker");
+      if (ticker) {
+        return normalizeSymbol(ticker);
+      }
+    }
+    return normalizeSymbol(String(raw ?? ""));
+  }
+
+  /**
+   * Все идентификаторы рынка/тикера, по которым API может ссылаться на рынок
+   * в ответе позиции (market в /positions/.../active).
+   */
+  private marketRefsOf(market: UpscaleMarket): string[] {
+    const config = asRecord(market.config);
+    const refs = [
+      market.id,
+      readString(config, "ticker"),
+      readString(config, "baseAsset"),
+      this.marketSymbol(market),
+    ];
+    return refs
+      .filter(
+        (value): value is string =>
+          typeof value === "string" && value.trim() !== ""
+      )
+      .map((value) => normalizeSymbol(value));
+  }
+
+  /**
+   * Совпадает ли рынок позиции с целевым рынком. Сравнение — по любому
+   * из идентификаторов рынка (id/тикер/baseAsset), а не только по точному
+   * формату поля market, чтобы объектная форма market из API не превращалась
+   * в "[object Object]" и подтверждение позиции работало на реальных данных.
+   */
+  private matchesMarket(
+    position: UpscalePosition,
+    market: UpscaleMarket
+  ): boolean {
+    const targetRefs = this.marketRefsOf(market);
+    const positionId = this.positionMarketIdOf(position);
+    return targetRefs.includes(positionId);
+  }
+
   private normalizeDirection(value: unknown): PositionSide {
     return String(value ?? "").toLowerCase() === "short" ? "short" : "long";
   }
@@ -943,6 +1213,42 @@ export class UpscaleBroker extends BaseBroker {
         openedAt: (raw.openedAt ?? raw.createdAt) as string | number,
         status: readString(raw, "status"),
       } satisfies UpscalePosition;
+    });
+  }
+
+  /**
+   * Активные ордера счёта (GET /orders/{accountId}/active). Нужны для
+   * диагностики: завис ли market-ордер в статусе active или был отклонён.
+   * Возвращает компактное представление для логирования.
+   */
+  private async fetchActiveOrders(
+    accountId: string
+  ): Promise<UpscaleActiveOrder[]> {
+    const response = await this.request("GET", `/orders/${accountId}/active`);
+    const record = asRecord(response);
+    const items = Array.isArray(response)
+      ? response
+      : asArray(record.orders ?? record.data ?? record.items);
+    return items.map((item) => {
+      const raw = asRecord(item);
+      return {
+        id: readString(raw, "id", "orderId"),
+        orderId: readString(raw, "orderId", "id"),
+        marketId: readString(raw, "marketId", "market"),
+        market: raw.market ?? raw.marketId,
+        status: readString(raw, "status"),
+        type: readString(raw, "type"),
+        direction: readString(raw, "direction", "side"),
+        amount: this.readHuman(readNumber(raw, "amount", "requestedAmount")),
+        filledAmount: this.readHuman(
+          readNumber(raw, "filledAmount", "executedAmount")
+        ),
+        leverage: this.readHuman(readNumber(raw, "leverage")),
+        price: this.readHuman(readNumber(raw, "price", "triggerPrice")),
+        indexPrice: this.readHuman(readNumber(raw, "indexPrice")),
+        errorCode: readString(raw, "errorCode", "error"),
+        createdAt: raw.createdAt as string | number | undefined,
+      } satisfies UpscaleActiveOrder;
     });
   }
 
