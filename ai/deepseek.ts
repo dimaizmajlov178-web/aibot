@@ -100,6 +100,12 @@ export class DeepSeekClient implements AiProvider {
 
       if (kind === "chat") {
         body.temperature = 0.2;
+        // У новых моделей DeepSeek (deepseek-flash / deepseek-v4-pro) thinking
+        // включён по умолчанию и может съедать весь max_tokens на
+        // reasoning_content, из-за чего JSON обрезается и парсинг не проходит.
+        // Для быстрых торговых решений отключаем thinking-режим: детерминированный
+        // и быстрый JSON, токены тратятся на сам ответ.
+        body.reasoning_effort = "none";
         if (this.config.jsonMode) {
           body.response_format = { type: "json_object" };
         }

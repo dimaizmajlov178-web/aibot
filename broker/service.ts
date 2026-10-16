@@ -6,7 +6,11 @@ import type {
   BrokerRepository,
 } from "../db/broker-repository";
 import type { AuditMeta } from "../core/audit";
-import { createBroker, type CreateBrokerOptions } from "./factory";
+import {
+  createBroker,
+  isSupportedBrokerType,
+  type CreateBrokerOptions,
+} from "./factory";
 import { parseBrokerApiKey } from "./validation";
 
 function maskApiKey(apiKey: string): string {
@@ -109,7 +113,23 @@ export class BrokerService {
       return null;
     }
     const apiKey = this.deps.crypto.decrypt(connection.encryptedApiKey);
-    return createBroker(connection.brokerType, apiKey, this.brokerOptions());
+    return createBroker(
+      this.resolveBrokerType(connection.brokerType),
+      apiKey,
+      this.brokerOptions()
+    );
+  }
+
+  /**
+   * Актуальный тип брокера для подключения. Приоритет у текущего BROKER_TYPE:
+   * сохранённый в связи тип мог устареть (раньше контейнер не получал
+   * BROKER_TYPE и при /connect записывался stub), из-за чего бот отдавал
+   * фейковые данные StubBroker вместо реального Upscale.
+   */
+  private resolveBrokerType(storedType: string): string {
+    return isSupportedBrokerType(this.deps.brokerType)
+      ? this.deps.brokerType
+      : storedType;
   }
 
   async disconnectUser(userId: number, meta: AuditMeta = {}): Promise<boolean> {

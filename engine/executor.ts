@@ -1,4 +1,5 @@
 import type { BaseBroker, OrderReceipt, OrderRequest } from "../broker/base";
+import { PositionNotOpenedError } from "../broker";
 
 export const DEFAULT_MAX_RETRIES = 3;
 export const RETRY_BASE_DELAY_MS = 500;
@@ -43,6 +44,12 @@ export class OrderExecutor {
       try {
         return await broker.executeOrder(order);
       } catch (error) {
+        if (error instanceof PositionNotOpenedError) {
+          // Ордер уже передан брокеру, но позиция не подтверждена. Ретрай
+          // создаст дубль ордера, поэтому пробрасываем сразу, без повторных
+          // попыток — открытие не засчитывается в счётчик сделок.
+          throw error;
+        }
         lastError = error;
         if (attempt < this.maxRetries) {
           const delay = RETRY_BASE_DELAY_MS * attempt;

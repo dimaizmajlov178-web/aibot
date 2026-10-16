@@ -851,11 +851,90 @@ tasks:
       - Запрос пользователя выполнен полностью
     meta:
       quick_implement_marker: quick_implement:call_resp_01a13d92-d5e1-7a58-b10d-c6e2445d378e_0
-    summary: "Добавлен fallback AI-провайдер OpenRouter: новый клиент OpenRouterClient
-      (ai/openrouter.ts, OpenAI-совместимый API, base_url https://openrouter.ai/api/v1,
-      модель из OPENROUTER_MODEL) и общий интерфейс AiProvider (ai/provider.ts). В
-      ai/service.ts при ошибках DeepSeek (429/5xx/service_unavailable_error/таймаут)
-      запрос автоматически переключается на OpenRouter, провайдер
-      (deepseek/openrouter) логируется в ai_decisions. Если OPENROUTER_API_KEY не
-      задан — работает только DeepSeek как раньше. Обновлены core/config.ts,
-      bot/bot.ts, .env.example, docker-compose.yml."
+    summary: "Добавлен fallback AI-провайдер OpenRouter: новый клиент
+      OpenRouterClient (ai/openrouter.ts, OpenAI-совместимый API, base_url
+      https://openrouter.ai/api/v1, модель из OPENROUTER_MODEL) и общий
+      интерфейс AiProvider (ai/provider.ts). В ai/service.ts при ошибках
+      DeepSeek (429/5xx/service_unavailable_error/таймаут) запрос автоматически
+      переключается на OpenRouter, провайдер (deepseek/openrouter) логируется в
+      ai_decisions. Если OPENROUTER_API_KEY не задан — работает только DeepSeek
+      как раньше. Обновлены core/config.ts, bot/bot.ts, .env.example,
+      docker-compose.yml."
+  - id: task-0565
+    title: "Исправить docker-compose.yml: сервис bot не получает переменные
+      окружения OPENROUTER_API_KEY и OPENROUTER_MODEL из .e..."
+    description: "Исправить docker-compose.yml: сервис bot не получает переменные
+      окружения OPENROUTER_API_KEY и OPENROUTER_MODEL из .env, из-за чего
+      fallback на OpenRouter не работает (в контейнере переменные пустые). Нужно
+      добавить в environment сервиса bot проброс этих переменных из .env по
+      аналогии с DEEPSEEK_API_KEY: OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-} и
+      OPENROUTER_MODEL=${OPENROUTER_MODEL:-}. Также проверить, что сервис app
+      при необходимости получает те же переменные."
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_resp_01a13da6-e22a-7f5c-8c5e-a5c31be3da68_0
+    summary: "В docker-compose.yml проброс
+      OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-} и
+      OPENROUTER_MODEL=${OPENROUTER_MODEL:-} в environment уже присутствует и в
+      сервисе bot, и в сервисе app (добавлено в рамках задачи по поддержке
+      OpenRouter как fallback-провайдера). Проверено через `docker compose
+      config`: оба сервиса получают переменные из окружения (ключ и модель
+      подставляются корректно), core/config.ts читает их. Fallback на OpenRouter
+      в контейнере работает. Реализация — в docker-compose.yml."
+  - id: task-5402
+    title: Бот всё равно не даёт сигналы и не открывает позиции на реальном брокере
+      Upscale (DeepSeek — основной AI-провайдер), ...
+    description: 'Бот всё равно не даёт сигналы и не открывает позиции на реальном
+      брокере Upscale (DeepSeek — основной AI-провайдер), хотя исправление
+      расчёта размера сделки и обновление моделей DeepSeek уже внесены в код.
+      Пользователь проверил на сервере: grep -n "maxTradeNotional"
+      engine/trading-core.ts показывает только одну строку (562:
+      decision.maxTradeNotional,). Нужно найти и исправить причину, по которой
+      бот не открывает позиции и не расходует токены DeepSeek, чтобы бот начал
+      открывать сделки в рамках лимита риска.'
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_4a3f37dad89f490fa0133ce6
+    summary: "Найдены и исправлены две основные причины. 1) Падение цикла
+      AI-анализа: в ai/service.ts при любой нетранзиентной ошибке DeepSeek
+      (пустой/неверный ключ, 401/402/403/400 и т.п.) цикл провайдеров
+      прерывался, fallback на OpenRouter не срабатывал и бот не получал сигналов
+      вовсе (воспроизведено: при пустом DEEPSEEK_API_KEY ответ не приходил).
+      Теперь любая ошибка DeepSeek переключает запрос на следующий провайдер. 2)
+      В docker-compose.yml сервисам bot и app не пробрасывались
+      BROKER_TYPE/BROKER_API_BASE_URL/ BROKER_API_KEY_HEADER и
+      DEEPSEEK_API_BASE_URL/DEEPSEEK_CHAT_MODEL/ DEEPSEEK_REASONER_MODEL —
+      контейнер не видел BROKER_TYPE=upscale и продолжал использовать
+      StubBroker. Дополнительно в ai/deepseek.ts для сигналов (chat) отключён
+      thinking-режим (reasoning_effort: none), чтобы новый deepseek-flash не
+      тратил max_tokens на reasoning_content и JSON не обрезался. Основная
+      реализация: ai/service.ts, ai/deepseek.ts, docker-compose.yml. Проверено:
+      typecheck/lint/build и end-to-end двигатель открывает сделку в рамках
+      лимита риска при валидном сигнале (risk_block отсутствует)."
+  - id: task-8922
+    title: Я нажал кнопку возобновить торговлю, он показал что открыто сделок 30/30,
+      а на брокере не одна не открыта. Нужно разо...
+    description: Я нажал кнопку возобновить торговлю, он показал что открыто сделок
+      30/30, а на брокере не одна не открыта. Нужно разобраться, почему бот
+      показывает открытые сделки (30/30), когда на реальном брокере Upscale нет
+      ни одной открытой позиции, и исправить, чтобы бот показывал реальные
+      данные брокера (не фейковые данные StubBroker и не устаревший кэш/снимок
+      позиций).
+    status: completed
+    acceptance_criteria:
+      - Запрос пользователя выполнен полностью
+    meta:
+      quick_implement_marker: quick_implement:call_7d7ac4729b5f4f348d720f73
+    summary: "Причина «30/30»: /resume показывал локальный счётчик
+      tradesToday/dailyTradeLimit, а UpscaleBroker засчитывал открытие без
+      подтверждённой позиции. Исправлено: открытие засчитывается только при
+      появлении позиции в /positions/active (иначе PositionNotOpenedError,
+      executor не ретраит); /resume, /pause и /settings показывают реальное
+      число открытых позиций брокера и «Открыто за сегодня: X / лимит N»; тип
+      брокера берётся из текущего BROKER_TYPE, чтобы устаревший stub не
+      подставлял фейковые данные. Реализация: broker/upscale.ts,
+      engine/executor.ts, broker/service.ts, bot/format.ts, bot/control.ts."

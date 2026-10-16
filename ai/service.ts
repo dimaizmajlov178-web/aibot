@@ -25,12 +25,7 @@ import {
   type TradeSignal,
 } from "./schema";
 import { toErrorMessage } from "./errors";
-import {
-  isTransientAiError,
-  type AiProvider,
-  type AiProviderName,
-  type AiProviderResult,
-} from "./provider";
+import type { AiProvider, AiProviderName, AiProviderResult } from "./provider";
 import type {
   AiDecision,
   AiDecisionRepository,
@@ -178,7 +173,12 @@ export class AiAnalysisService {
             )
           );
           const isLastProvider = p === this.providers.length - 1;
-          if (isLastProvider || !isTransientAiError(error)) {
+          // Любая ошибка текущего провайдера (не только 429/5xx/таймаут):
+          // конфигурационная (пустой API-ключ), биллинговая (402), 400/401/403
+          // и т.п. — не должна обрывать цикл. Пробуем следующий провайдер
+          // (OpenRouter как fallback), чтобы цикл анализа продолжал работать
+          // и бот по-прежнему давал сигналы.
+          if (isLastProvider) {
             break;
           }
         }

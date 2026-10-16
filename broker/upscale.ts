@@ -19,8 +19,8 @@ const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_DELAY_MS = 750;
 const DEFAULT_ACCOUNT_CACHE_MS = 60_000;
 const DEFAULT_MARKET_CACHE_MS = 300_000;
-const POSITION_LOOKUP_ATTEMPTS = 5;
-const POSITION_LOOKUP_DELAY_MS = 400;
+const POSITION_LOOKUP_ATTEMPTS = 8;
+const POSITION_LOOKUP_DELAY_MS = 500;
 
 type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 
@@ -49,6 +49,18 @@ export class UpscaleApiError extends Error {
   ) {
     super(message);
     this.name = "UpscaleApiError";
+  }
+}
+
+/**
+ * Ордер на открытие ушёл брокеру, но позиция так и не появилась в активных.
+ * Отличается от UpscaleApiError тем, что повторный ретрай создаст дубль ордера,
+ * поэтому executor не должен ретраить такую ошибку.
+ */
+export class PositionNotOpenedError extends BrokerConnectionError {
+  constructor(message: string) {
+    super(message);
+    this.name = "PositionNotOpenedError";
   }
 }
 
@@ -544,10 +556,15 @@ export class UpscaleBroker extends BaseBroker {
     });
 
     const position = await this.waitForPosition(accountId, marketId, direction);
-    const executedPrice = position
-      ? this.positionEntryPrice(position, market)
-      : fromFp9(response.indexPrice) || price;
-    const quantity = position ? fromFp9(position.size) : order.quantity;
+    if (!position) {
+      // Не засчитываем открытие, которого нет на брокере: иначе движок
+      // покажет «сделок открыто 30/30», а на брокере не будет ни одной позиции.
+      throw new PositionNotOpenedError(
+        `Ордер на открытие ${order.symbol} ${direction} передан брокеру (id=${response.id ?? "?"}), но позиция не подтверждена: после ${POSITION_LOOKUP_ATTEMPTS} опросов активных позиций её нет. Проверьте счёт на брокере — ордер мог не исполниться.`
+      );
+    }
+    const executedPrice = this.positionEntryPrice(position, market);
+    const quantity = fromFp9(position.size);
 
     return {
       orderId: String(response.id ?? `upscale-${Date.now()}`),

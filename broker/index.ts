@@ -17,6 +17,7 @@ export { StubBroker } from "./stub";
 export {
   UpscaleBroker,
   UpscaleApiError,
+  PositionNotOpenedError,
   DEFAULT_UPSCALE_BASE_URL,
   toFp9,
   fromFp9,

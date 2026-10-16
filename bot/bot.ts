@@ -214,6 +214,7 @@ export function createBot(config: BotConfig): Telegraf {
   registerControlHandlers(bot, {
     riskManager,
     isConnected: (userId) => service.isConnected(userId),
+    resolveBroker: (userId) => service.getBrokerForUser(userId),
   });
 
   registerStrategyHandlers(bot, {

@@ -159,7 +159,8 @@ export function formatSettings(settings: TradingSettings): string {
 
 export function formatTradingState(
   state: TradingState,
-  settings: TradingSettings
+  settings: TradingSettings,
+  openPositions?: number | null
 ): string {
   const lines = ["Состояние торговли"];
   lines.push(state.paused ? "Пауза: да (/resume)" : "Пауза: нет");
@@ -169,8 +170,17 @@ export function formatTradingState(
   if (state.totalStopTriggered) {
     lines.push("Автостоп по общей просадке: да");
   }
+  if (openPositions === undefined) {
+    // Брокер не подключён — строку про позиции не добавляем.
+  } else if (openPositions === null) {
+    lines.push("Открыто позиций на брокере: недоступно");
+  } else {
+    lines.push(
+      `Открыто позиций на брокере: ${openPositions} / лимит ${settings.maxPositions}`
+    );
+  }
   lines.push(
-    `Сделок сегодня: ${state.tradesToday} / ${settings.dailyTradeLimit}`
+    `Открыто за сегодня: ${state.tradesToday} / ${settings.dailyTradeLimit} (дневной лимит сделок)`
   );
   lines.push(`Режим AI: ${settings.aiMode}`);
   return lines.join("\n");
