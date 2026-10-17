@@ -15,7 +15,7 @@ import type { LearningRecorder } from "../learning/types";
 import type { AuditService } from "../core/audit";
 import { createRequestId } from "../core/request-id";
 
-export const DEFAULT_DECISION_INTERVAL_MS = 300_000;
+export const DEFAULT_DECISION_INTERVAL_MS = 60_000;
 export const DEFAULT_LOCK_TTL_MS = 30_000;
 /** Пауза перед следующей итерацией после ошибки rate limit брокера (429). */
 export const RATE_LIMIT_BACKOFF_MS = 5_000;
@@ -25,11 +25,14 @@ export const RATE_LIMIT_BACKOFF_MS = 5_000;
  * проверяются не чаще раза в этот интервал на каждый символ.
  */
 export const PROTECTIVE_STATUS_CHECK_INTERVAL_MS = 120_000;
+/** Порог резкого движения цены (%), при котором запускается событийный анализ. */
+export const DEFAULT_SHARP_MOVE_THRESHOLD_PERCENT = 1;
 
 export type EngineEventType =
   | "signal"
   | "trade_open"
   | "trade_close"
+  | "trade_reverse"
   | "risk_block"
   | "dup_skip"
   | "admin_notify"
@@ -105,12 +108,16 @@ export class TradingCore {
    * лишние GET /orders не упирались в rate limit брокера.
    */
   private readonly protectiveStatusCheckedAt = new Map<string, number>();
+  /** Последние зафиксированные цены символов для детекции резких движений. */
+  private readonly lastPrices = new Map<string, number>();
+  private readonly sharpMoveThresholdPercent: number;
 
   constructor(private readonly deps: TradingCoreDeps) {
     this.decisionIntervalMs =
       deps.decisionIntervalMs ?? DEFAULT_DECISION_INTERVAL_MS;
     this.lockTtlMs = deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS;
     this.supportedSymbols = [...deps.supportedSymbols];
+    this.sharpMoveThresholdPercent = DEFAULT_SHARP_MOVE_THRESHOLD_PERCENT;
   }
 
   /** Запускает цикл решений по таймеру. */
@@ -268,6 +275,81 @@ export class TradingCore {
             )
           );
         }
+      }
+    }
+
+    // Событийный анализ: резкие движения цены запускают анализ символа сразу.
+    await this.checkSharpMoves();
+  }
+
+  /**
+   * Событийный анализ резких движений цены: сравнивает текущие цены рынков
+   * (с брокера) с предыдущими и при превышении порога запускает анализ
+   * символа через onSharpMove, не дожидаясь следующего тика цикла.
+   */
+  private async checkSharpMoves(): Promise<void> {
+    let userIds: number[];
+    try {
+      userIds = await this.deps.resolveUserIds();
+    } catch {
+      return;
+    }
+    for (const userId of userIds) {
+      let broker: BaseBroker | null = null;
+      try {
+        broker = await this.deps.resolveBroker(userId);
+      } catch {
+        continue;
+      }
+      if (!broker) {
+        continue;
+      }
+      const getMarkets = (
+        broker as unknown as {
+          getMarkets?: () => Promise<
+            Array<{ symbol: string; indexPrice: number }>
+          >;
+        }
+      ).getMarkets;
+      if (typeof getMarkets !== "function") {
+        continue;
+      }
+      try {
+        const markets = await getMarkets.call(broker);
+        for (const market of markets) {
+          const symbol = market.symbol.trim().toUpperCase();
+          const price = market.indexPrice;
+          if (!(price > 0)) {
+            continue;
+          }
+          const prev = this.lastPrices.get(symbol);
+          this.lastPrices.set(symbol, price);
+          if (prev && prev > 0) {
+            const percent = ((price - prev) / prev) * 100;
+            if (Math.abs(percent) >= this.sharpMoveThresholdPercent) {
+              this.emit(
+                event(
+                  "diagnostic",
+                  0,
+                  symbol,
+                  `Резкое движение цены: ${percent.toFixed(2)}% (порог ${this.sharpMoveThresholdPercent}%) — запущен анализ`,
+                  {
+                    source: "sharp_move",
+                    percent,
+                    threshold: this.sharpMoveThresholdPercent,
+                    price,
+                    prevPrice: prev,
+                  },
+                  createRequestId()
+                )
+              );
+              await this.onSharpMove(symbol, percent);
+            }
+          }
+        }
+        break;
+      } catch {
+        continue;
       }
     }
   }
@@ -608,10 +690,24 @@ export class TradingCore {
           requestId
         );
         await this.maybeRateLimitBackoff(error);
+        return events;
       } finally {
         await this.deps.lockStore.release(key);
       }
-      return events;
+
+      // Разворот в один шаг: противоположный сигнал — закрыли позицию и сразу
+      // открываем новую в другую сторону, не дожидаясь следующего цикла.
+      snapshot = await this.refreshSnapshot(broker, snapshot);
+      this.emit(
+        event(
+          "trade_reverse",
+          userId,
+          normSymbol,
+          `Разворот: закрыт ${existing.side}, открываем ${openSide}`,
+          { source, requestId, fromSide: existing.side, toSide: openSide },
+          requestId
+        )
+      );
     }
 
     // Нет позиции — рассматриваем открытие.
