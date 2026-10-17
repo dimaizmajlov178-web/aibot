@@ -1,13 +1,35 @@
-import type { BrokerAccount, OpenPosition } from "../broker/base";
+import type { BrokerAccount, ClosedTrade, OpenPosition } from "../broker/base";
 import type { PositionContext, PortfolioContext } from "./types";
 import { AiAnalysisError } from "./errors";
 
-export interface PortfolioProvider {
-  getPortfolio(userId: number): Promise<PortfolioContext>;
+/**
+ * Средняя продолжительность сделки в часах по закрытым сделкам. Считается
+ * только по сделкам с валидными датами открытия/закрытия (длительность > 0
+ * и не «вечная» — отсекаем аномалии в 0 и > 365 дней). Используется AI для
+ * ориентира по времени удержания позиции.
+ */
+export function averageHoldingTimeHours(
+  closedTrades: readonly ClosedTrade[]
+): number | null {
+  const durations: number[] = [];
+  for (const trade of closedTrades) {
+    const opened = Date.parse(trade.openedAt);
+    const closed = Date.parse(trade.closedAt);
+    if (!Number.isFinite(opened) || !Number.isFinite(closed)) {
+      continue;
+    }
+    const hours = (closed - opened) / 3_600_000;
+    if (hours > 0 && hours <= 24 * 365) {
+      durations.push(hours);
+    }
+  }
+  if (durations.length === 0) {
+    return null;
+  }
+  const avg =
+    durations.reduce((sum, value) => sum + value, 0) / durations.length;
+  return Math.round(avg * 100) / 100;
 }
-
-const DEFAULT_RISK_PER_TRADE_PERCENT = 1;
-const DEFAULT_MAX_POSITIONS = 5;
 
 function toPositionContext(position: OpenPosition): PositionContext {
   return {
@@ -20,9 +42,28 @@ function toPositionContext(position: OpenPosition): PositionContext {
   };
 }
 
+export interface PortfolioProvider {
+  getPortfolio(userId: number): Promise<PortfolioContext>;
+}
+
+export interface PortfolioAccountOptions {
+  /** Риск (стоп-лосс) в процентах от цены входа. */
+  stopLossPercent?: number;
+  /** Целевое соотношение риска к прибыли (RR) для тейк-профита. */
+  riskRewardRatio?: number;
+  /** Максимум одновременных открытых позиций. */
+  maxPositions?: number;
+  /**
+   * Закрытые сделки для расчёта средней длительности сделки. Если не
+   * переданы — avgHoldingTimeHours = null.
+   */
+  closedTrades?: readonly ClosedTrade[];
+}
+
 export function portfolioFromAccount(
   account: BrokerAccount,
-  positions: OpenPosition[]
+  positions: OpenPosition[],
+  options: PortfolioAccountOptions = {}
 ): PortfolioContext {
   return {
     balance: account.balance,
@@ -32,8 +73,11 @@ export function portfolioFromAccount(
     dailyPnl: account.dailyPnl,
     totalPnl: account.totalPnl,
     positions: positions.map(toPositionContext),
-    riskPerTradePercent: DEFAULT_RISK_PER_TRADE_PERCENT,
-    maxPositions: Math.max(1, DEFAULT_MAX_POSITIONS),
+    riskPerTradePercent: options.stopLossPercent ?? 1,
+    stopLossPercent: options.stopLossPercent ?? 1,
+    riskRewardRatio: options.riskRewardRatio ?? 2,
+    maxPositions: Math.max(1, options.maxPositions ?? 5),
+    avgHoldingTimeHours: averageHoldingTimeHours(options.closedTrades ?? []),
   };
 }
 
@@ -41,6 +85,16 @@ export interface BrokerPortfolioProviderDeps {
   getBroker: (userId: number) => Promise<{
     getAccount(): Promise<BrokerAccount>;
     getPositions(): Promise<OpenPosition[]>;
+    getClosedTrades?(limit?: number): Promise<ClosedTrade[]>;
+  } | null>;
+  /**
+   * Дополнительные данные из настроек пользователя (стоп-лосс % и RR).
+   * Может вернуть null/undefined — тогда используются дефолтные значения.
+   */
+  getSettings?: (userId: number) => Promise<{
+    stopLossPercent?: number;
+    riskRewardRatio?: number;
+    maxPositions?: number;
   } | null>;
 }
 
@@ -58,10 +112,21 @@ export class BrokerPortfolioProvider implements PortfolioProvider {
       );
     }
 
-    const [account, positions] = await Promise.all([
+    const [account, positions, settings, closedTrades] = await Promise.all([
       broker.getAccount(),
       broker.getPositions(),
+      this.deps.getSettings
+        ? this.deps.getSettings(userId).catch(() => null)
+        : Promise.resolve(null),
+      broker.getClosedTrades
+        ? broker.getClosedTrades(50).catch(() => [])
+        : Promise.resolve([]),
     ]);
-    return portfolioFromAccount(account, positions);
+    return portfolioFromAccount(account, positions, {
+      stopLossPercent: settings?.stopLossPercent,
+      riskRewardRatio: settings?.riskRewardRatio,
+      maxPositions: settings?.maxPositions,
+      closedTrades,
+    });
   }
 }

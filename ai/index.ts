@@ -34,7 +34,11 @@ export {
   timeframeStepMs,
 } from "./market-data";
 export type { MarketDataProvider } from "./market-data";
-export { BrokerPortfolioProvider, portfolioFromAccount } from "./portfolio";
+export {
+  BrokerPortfolioProvider,
+  portfolioFromAccount,
+  averageHoldingTimeHours,
+} from "./portfolio";
 export type { PortfolioProvider } from "./portfolio";
 export { computeIndicators, MIN_CANDLES_FOR_INDICATORS } from "./indicators";
 export type {

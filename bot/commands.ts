@@ -21,7 +21,7 @@ export const COMMANDS: readonly BotCommandDescriptor[] = [
   { name: "resume", description: "Возобновить автоторговлю" },
   {
     name: "settings",
-    description: "Настройки риска, позиций, символов и режима AI",
+    description: "Настройки: риск, стоп-лосс, RR, позиции, символы, режим AI",
   },
   { name: "learning", description: "Суточный learning-отчёт по сделки" },
   {

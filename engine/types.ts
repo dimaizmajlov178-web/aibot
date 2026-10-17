@@ -11,6 +11,18 @@ export interface TradingSettings {
   userId: number;
   /** Максимальный % баланса на одну сделку (например 1 -> 1%). */
   riskPerTradePercent: number;
+  /**
+   * Размер стоп-лосса в процентах от цены входа (например 1 -> стоп 1%).
+   * По умолчанию равен риску на сделку (riskPerTradePercent), но задаётся
+   * отдельно через /settings stop_loss=<%>: риск на сделку реализуется через
+   * защитный стоп-ордер на бирже именно этого размера.
+   */
+  stopLossPercent: number;
+  /**
+   * Целевое соотношение риска к прибыли (RR) для тейк-профита. Тейк = вход ±
+   * (RR × стоп): при RR=2 тейк в 2 раза дальше от входа, чем стоп.
+   */
+  riskRewardRatio: number;
   /** Максимум одновременных открытых позиций. */
   maxPositions: number;
   /** Лимит сделок в день (открытий). */
@@ -28,6 +40,8 @@ export interface TradingSettings {
 
 export interface TradingSettingsPatch {
   riskPerTradePercent?: number;
+  stopLossPercent?: number;
+  riskRewardRatio?: number;
   maxPositions?: number;
   dailyTradeLimit?: number;
   maxDailyDrawdownPercent?: number;

@@ -50,8 +50,9 @@ tasks:
       - В summary задачи содержится полный актуальный код файлов
         engine/trading-core.ts и bot/bot.ts, готовый к копированию и замене на
         сервере, и краткая инструкция по замене файлов и перезапуску бота
-    summary: "task-0848 (readonly): выданы актуальные файлы торгового цикла для
-      замены на сервере. Основная реализация исправленного цикла —
+    summary: >-
+      task-0848 (readonly): выданы актуальные файлы торгового цикла для замены
+      на сервере. Основная реализация исправленного цикла —
       engine/trading-core.ts (первый tick сразу после старта, диагностика пустых
       веток, rate-limit backoff, защита от дублей через lockStore) и bot/bot.ts
       (сборка TradingCore и onEvent-логирование шагов цикла в лог). Ниже полный
@@ -68,37 +69,33 @@ tasks:
 
       cat > engine/trading-core.ts << 'EOF'
 
-      import type { BaseBroker, PositionSide } from \"../broker/base\";
+      import type { BaseBroker, PositionSide } from "../broker/base";
 
-      import { UpscaleApiError } from \"../broker\";
+      import { UpscaleApiError } from "../broker";
 
-      import type { AnalyzeResult, AiAnalysisService } from \"../ai/service\";
+      import type { AnalyzeResult, AiAnalysisService } from "../ai/service";
 
-      import type { TradeSignal } from \"../ai/schema\";
+      import type { TradeSignal } from "../ai/schema";
 
-      import type { MarketDataProvider } from \"../ai/market-data\";
+      import type { MarketDataProvider } from "../ai/market-data";
 
-      import { isSymbolAllowed, type TradingSettings } from \"./types\";
+      import { isSymbolAllowed, type TradingSettings } from "./types";
 
       import {
+        RiskManager,
+        aiModeMultiplier,
+        type BrokerSnapshot,
+      } from "./risk-manager";
 
-      \  RiskManager,
+      import { OrderExecutor } from "./executor";
 
-      \  aiModeMultiplier,
+      import type { LockStore } from "./lock";
 
-      \  type BrokerSnapshot,
+      import type { LearningRecorder } from "../learning/types";
 
-      } from \"./risk-manager\";
+      import type { AuditService } from "../core/audit";
 
-      import { OrderExecutor } from \"./executor\";
-
-      import type { LockStore } from \"./lock\";
-
-      import type { LearningRecorder } from \"../learning/types\";
-
-      import type { AuditService } from \"../core/audit\";
-
-      import { createRequestId } from \"../core/request-id\";
+      import { createRequestId } from "../core/request-id";
 
 
       export const DEFAULT_DECISION_INTERVAL_MS = 300_000;
@@ -112,1778 +109,910 @@ tasks:
 
 
       export type EngineEventType =
-
-      \  | \"signal\"
-
-      \  | \"trade_open\"
-
-      \  | \"trade_close\"
-
-      \  | \"risk_block\"
-
-      \  | \"dup_skip\"
-
-      \  | \"admin_notify\"
-
-      \  | \"pause_changed\"
-
-      \  | \"error\"
-
-      \  | \"diagnostic\";
-
+        | "signal"
+        | "trade_open"
+        | "trade_close"
+        | "risk_block"
+        | "dup_skip"
+        | "admin_notify"
+        | "pause_changed"
+        | "error"
+        | "diagnostic";
 
       export interface EngineEvent {
-
-      \  type: EngineEventType;
-
-      \  userId: number;
-
-      \  symbol: string;
-
-      \  side?: PositionSide;
-
-      \  message: string;
-
-      \  data?: Record<string, unknown>;
-
-      \  at: string;
-
-      \  requestId?: string;
-
+        type: EngineEventType;
+        userId: number;
+        symbol: string;
+        side?: PositionSide;
+        message: string;
+        data?: Record<string, unknown>;
+        at: string;
+        requestId?: string;
       }
 
 
       export interface TradingCoreDeps {
-
-      \  riskManager: RiskManager;
-
-      \  executor: OrderExecutor;
-
-      \  lockStore: LockStore;
-
-      \  ai: AiAnalysisService;
-
-      \  marketData: MarketDataProvider;
-
-      \  resolveBroker: (userId: number) => Promise<BaseBroker | null>;
-
-      \  resolveUserIds: () => Promise<number[]>;
-
-      \  /** Колбэк уведомления админа (например, при общей просадке). */
-
-      \  notifyAdmin?: (userId: number, message: string) => void;
-
-      \  /** Все известные символы, доступные для торговли. */
-
-      \  supportedSymbols: readonly string[];
-
-      \  decisionIntervalMs?: number;
-
-      \  lockTtlMs?: number;
-
-      \  /** Внешний наблюдатель событий (телеметрия/логирование). */
-
-      \  onEvent?: (event: EngineEvent) => void;
-
-      \  /** Запись датасета сделок для самообучения. */
-
-      \  learning: LearningRecorder;
-
-      \  /** Глобальная пауза (/global_pause): при true торговля остановлена у
-      всех. */
-
-      \  isGlobalPaused?: () => Promise<boolean> | boolean;
-
-      \  /** Журнал аудита (торговые действия, риск-блокировки, ошибки). */
-
-      \  audit?: AuditService;
-
+        riskManager: RiskManager;
+        executor: OrderExecutor;
+        lockStore: LockStore;
+        ai: AiAnalysisService;
+        marketData: MarketDataProvider;
+        resolveBroker: (userId: number) => Promise<BaseBroker | null>;
+        resolveUserIds: () => Promise<number[]>;
+        /** Колбэк уведомления админа (например, при общей просадке). */
+        notifyAdmin?: (userId: number, message: string) => void;
+        /** Все известные символы, доступные для торговли. */
+        supportedSymbols: readonly string[];
+        decisionIntervalMs?: number;
+        lockTtlMs?: number;
+        /** Внешний наблюдатель событий (телеметрия/логирование). */
+        onEvent?: (event: EngineEvent) => void;
+        /** Запись датасета сделок для самообучения. */
+        learning: LearningRecorder;
+        /** Глобальная пауза (/global_pause): при true торговля остановлена у всех. */
+        isGlobalPaused?: () => Promise<boolean> | boolean;
+        /** Журнал аудита (торговые действия, риск-блокировки, ошибки). */
+        audit?: AuditService;
       }
 
 
       function roundQuantity(value: number): number {
-
-      \  if (value <= 0) {
-
-      \    return 0;
-
-      \  }
-
-      \  return Math.round(value * 10_000) / 10_000;
-
+        if (value <= 0) {
+          return 0;
+        }
+        return Math.round(value * 10_000) / 10_000;
       }
 
 
       /**
-
-      \ * Торговое ядро: запускает цикл решений по таймеру и по событиям
-
-      \ * (закрытие свечи, резкое движение), исполняет ордера через
-
-      \ * broker.execute_order() с ретраями, применяет риск-контроль и защиту
-
-      \ * от дублей.
-
-      \ */
-
+       * Торговое ядро: запускает цикл решений по таймеру и по событиям
+       * (закрытие свечи, резкое движение), исполняет ордера через
+       * broker.execute_order() с ретраями, применяет риск-контроль и защиту
+       * от дублей.
+       */
       export class TradingCore {
-
-      \  private readonly decisionIntervalMs: number;
-
-      \  private readonly lockTtlMs: number;
-
-      \  private readonly supportedSymbols: readonly string[];
-
-      \  private timer: ReturnType<typeof setInterval> | null = null;
-
-      \  private running = false;
-
-
-      \  constructor(private readonly deps: TradingCoreDeps) {
-
-      \    this.decisionIntervalMs =
-
-      \      deps.decisionIntervalMs ?? DEFAULT_DECISION_INTERVAL_MS;
-
-      \    this.lockTtlMs = deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS;
-
-      \    this.supportedSymbols = [...deps.supportedSymbols];
-
-      \  }
-
-
-      \  /** Запускает цикл решений по таймеру. */
-
-      \  start(): void {
-
-      \    if (this.running) {
-
-      \      return;
-
-      \    }
-
-      \    this.running = true;
-
-      \    this.emit(
-
-      \      event(
-
-      \        \"diagnostic\",
-
-      \        0,
-
-      \        \"\",
-
-      \        `торговый цикл запущен: интервал ${this.decisionIntervalMs} мс`,
-
-      \        {
-
-      \          decisionIntervalMs: this.decisionIntervalMs,
-
-      \          lockTtlMs: this.lockTtlMs,
-
-      \          symbols: this.supportedSymbols,
-
-      \        },
-
-      \        createRequestId()
-
-      \      )
-
-      \    );
-
-      \    // Первый тик выполняем сразу после старта, а не дожидаясь первого
-
-      \    // интервала (по умолчанию 5 минут): иначе после перезапуска бота,
-      пока
-
-      \    // дойдёт первый tick, торговый цикл молчит, и в логах видны только
-      строки
-
-      \    // запуска.
-
-      \    void this.tick().catch((error) => this.onTickFatal(error));
-
-      \    this.timer = setInterval(() => {
-
-      \      void this.tick().catch((error) => this.onTickFatal(error));
-
-      \    }, this.decisionIntervalMs);
-
-      \    this.timer.unref?.();
-
-      \  }
-
-
-      \  /** Останавливает таймер. Команда-резерв для /global_pause. */
-
-      \  stopPumping(): void {
-
-      \    if (this.timer) {
-
-      \      clearInterval(this.timer);
-
-      \      this.timer = null;
-
-      \    }
-
-      \    this.running = false;
-
-      \  }
-
-
-      \  /**
-
-      \   * Последняя линия защиты: исключение никогда не должно выходить из
-      tick()
-
-      \   * в `void this.tick()` (иначе unhandled rejection роняет процесс).
-
-      \   */
-
-      \  private onTickFatal(error: unknown): void {
-
-      \    const requestId = createRequestId();
-
-      \    try {
-
-      \      this.emit(
-
-      \        event(
-
-      \          \"error\",
-
-      \          0,
-
-      \          \"\",
-
-      \          `Необработанная ошибка торгового цикла: ${
-
-      \            error instanceof Error ? error.message : String(error)
-
-      \          }`,
-
-      \          { requestId },
-
-      \          requestId
-
-      \        )
-
-      \      );
-
-      \    } catch {
-
-      \      // Ошибка наблюдателя не должна ронять процесс.
-
-      \    }
-
-      \  }
-
-
-      \  /** Полный цикл решений по таймеру для всех пользователей и символов.
-      */
-
-      \  async tick(): Promise<void> {
-
-      \    const requestId = createRequestId();
-
-      \    let userIds: number[];
-
-      \    try {
-
-      \      userIds = await this.deps.resolveUserIds();
-
-      \    } catch (error) {
-
-      \      // Если БД/репозиторий подключений недоступен — цикл не должен
-      молча
-
-      \      // пропускать итерацию: пишем ошибку, чтобы причина была видна в
-      логах.
-
-      \      this.emit(
-
-      \        event(
-
-      \          \"error\",
-
-      \          0,
-
-      \          \"\",
-
-      \          `Ошибка чтения списка подключённых пользователей: ${
-
-      \            error instanceof Error ? error.message : String(error)
-
-      \          }`,
-
-      \          { source: \"timer\" },
-
-      \          requestId
-
-      \        )
-
-      \      );
-
-      \      return;
-
-      \    }
-
-
-      \    if (userIds.length === 0) {
-
-      \      // Самая частая причина «пустых» логов: боту не для кого торговать.
-
-      \      // Пишем диагностику, чтобы это было очевидно, а не молчанием.
-
-      \      this.emit(
-
-      \        event(
-
-      \          \"diagnostic\",
-
-      \          0,
-
-      \          \"\",
-
-      \          \"торговый цикл: нет подключённых пользователей (выполните
-      /connect в боте)\",
-
-      \          { source: \"timer\" },
-
-      \          requestId
-
-      \        )
-
-      \      );
-
-      \      return;
-
-      \    }
-
-
-      \    for (const userId of userIds) {
-
-      \      let symbols: string[];
-
-      \      try {
-
-      \        symbols = await this.symbolsForUser(userId);
-
-      \      } catch (error) {
-
-      \        this.emit(
-
-      \          event(
-
-      \            \"error\",
-
-      \            userId,
-
-      \            \"\",
-
-      \            `Ошибка чтения настроек пользователя ${userId}: ${
-
-      \              error instanceof Error ? error.message : String(error)
-
-      \            }`,
-
-      \            { source: \"timer\" },
-
-      \            requestId
-
-      \          )
-
-      \        );
-
-      \        continue;
-
-      \      }
-
-      \      if (symbols.length === 0) {
-
-      \        // Тихая ветка: пользователь есть, но whitelist не совпадает ни с
-
-      \        // одним поддерживаемым символом. Раньше цикл молча ничего не
-      делал.
-
-      \        this.emit(
-
-      \          event(
-
-      \            \"diagnostic\",
-
-      \            userId,
-
-      \            \"\",
-
-      \            \"торговый цикл: у пользователя нет символов для торговли
-      (whitelist не пересекается с поддерживаемыми)\",
-
-      \            { source: \"timer\" },
-
-      \            requestId
-
-      \          )
-
-      \        );
-
-      \        continue;
-
-      \      }
-
-      \      for (const symbol of symbols) {
-
-      \        try {
-
-      \          await this.evaluateSymbol(userId, symbol, \"timer\");
-
-      \        } catch (error) {
-
-      \          this.emit(
-
-      \            event(
-
-      \              \"error\",
-
-      \              userId,
-
-      \              symbol,
-
-      \              `Необработанная ошибка обработки ${symbol}: ${
-
-      \                error instanceof Error ? error.message : String(error)
-
-      \              }`,
-
-      \              { source: \"timer\" },
-
-      \              requestId
-
-      \            )
-
-      \          );
-
-      \        }
-
-      \      }
-
-      \    }
-
-      \  }
-
-
-      \  /** Событие: закрытие свечи. */
-
-      \  async onCandleClose(symbol: string, _timeframe?: string): Promise<void>
-      {
-
-      \    await this.runForEvent(symbol, \"candle_close\");
-
-      \  }
-
-
-      \  /** Событие: резкое движение цены (процент и направление). */
-
-      \  async onSharpMove(symbol: string, percent: number): Promise<void> {
-
-      \    const threshold = 2;
-
-      \    if (Math.abs(percent) < threshold) {
-
-      \      return;
-
-      \    }
-
-      \    await this.runForEvent(symbol, \"sharp_move\");
-
-      \  }
-
-
-      \  private async runForEvent(symbol: string, source: string):
-      Promise<void> {
-
-      \    let userIds: number[];
-
-      \    try {
-
-      \      userIds = await this.deps.resolveUserIds();
-
-      \    } catch (error) {
-
-      \      this.emit(
-
-      \        event(
-
-      \          \"error\",
-
-      \          0,
-
-      \          symbol,
-
-      \          `Ошибка чтения списка подключённых пользователей: ${
-
-      \            error instanceof Error ? error.message : String(error)
-
-      \          }`,
-
-      \          { source },
-
-      \          createRequestId()
-
-      \        )
-
-      \      );
-
-      \      return;
-
-      \    }
-
-      \    for (const userId of userIds) {
-
-      \      try {
-
-      \        const settings = await this.deps.riskManager.getSettings(userId);
-
-      \        if (isSymbolAllowed(settings, symbol)) {
-
-      \          await this.evaluateSymbol(userId, symbol, source);
-
-      \        }
-
-      \      } catch (error) {
-
-      \        this.emit(
-
-      \          event(
-
-      \            \"error\",
-
-      \            userId,
-
-      \            symbol,
-
-      \            `Необработанная ошибка обработки события ${source}: ${
-
-      \              error instanceof Error ? error.message : String(error)
-
-      \            }`,
-
-      \            { source },
-
-      \            createRequestId()
-
-      \          )
-
-      \        );
-
-      \      }
-
-      \    }
-
-      \  }
-
-
-      \  private async symbolsForUser(userId: number): Promise<string[]> {
-
-      \    const settings = await this.deps.riskManager.getSettings(userId);
-
-      \    if (settings.symbols.length > 0) {
-
-      \      return this.supportedSymbols.filter((symbol) =>
-
-      \        isSymbolAllowed(settings, symbol)
-
-      \      );
-
-      \    }
-
-      \    return [...this.supportedSymbols];
-
-      \  }
-
-
-      \  private emit(event: EngineEvent): void {
-
-      \    this.deps.onEvent?.(event);
-
-      \  }
-
-
-      \  /**
-
-      \   * Цикл решений для одного пользователя и символа: анализ AI,
-      риск-контроль,
-
-      \   * исполнение ордера под защитой от дублей.
-
-      \   */
-
-      \  async evaluateSymbol(
-
-      \    userId: number,
-
-      \    symbol: string,
-
-      \    source: string
-
-      \  ): Promise<EngineEvent[]> {
-
-      \    const normSymbol = symbol.trim().toUpperCase();
-
-      \    const requestId = createRequestId();
-
-      \    const events: EngineEvent[] = [];
-
-
-      \    // Глобальная пауза админом (/global_pause) останавливает торговлю у
-      всех.
-
-      \    if (await this.deps.isGlobalPaused?.()) {
-
-      \      this.emit(
-
-      \        event(
-
-      \          \"diagnostic\",
-
-      \          userId,
-
-      \          normSymbol,
-
-      \          \"пропуск: глобальная пауза (/global_pause)\",
-
-      \          { source },
-
-      \          requestId
-
-      \        )
-
-      \      );
-
-      \      return events;
-
-      \    }
-
-
-      \    let broker: BaseBroker | null;
-
-      \    try {
-
-      \      broker = await this.deps.resolveBroker(userId);
-
-      \    } catch (error) {
-
-      \      this.pushError(
-
-      \        events,
-
-      \        userId,
-
-      \        normSymbol,
-
-      \        \"Ошибка получения клиента брокера\",
-
-      \        error,
-
-      \        requestId
-
-      \      );
-
-      \      return events;
-
-      \    }
-
-
-      \    if (!broker) {
-
-      \      this.emit(
-
-      \        event(
-
-      \          \"diagnostic\",
-
-      \          userId,
-
-      \          normSymbol,
-
-      \          \"пропуск: брокер не подключён (выполните /connect)\",
-
-      \          { source },
-
-      \          requestId
-
-      \        )
-
-      \      );
-
-      \      return events;
-
-      \    }
-
-
-      \    let settings: TradingSettings;
-
-      \    try {
-
-      \      settings = await this.deps.riskManager.getSettings(userId);
-
-      \    } catch (error) {
-
-      \      this.pushError(
-
-      \        events,
-
-      \        userId,
-
-      \        normSymbol,
-
-      \        \"Ошибка чтения настроек торговли\",
-
-      \        error,
-
-      \        requestId
-
-      \      );
-
-      \      return events;
-
-      \    }
-
-      \    if (!isSymbolAllowed(settings, normSymbol)) {
-
-      \      this.emit(
-
-      \        event(
-
-      \          \"diagnostic\",
-
-      \          userId,
-
-      \          normSymbol,
-
-      \          \"пропуск: символ не разрешён настройками (/settings
-      symbols=...)\",
-
-      \          { source },
-
-      \          requestId
-
-      \        )
-
-      \      );
-
-      \      return events;
-
-      \    }
-
-
-      \    // Ошибки брокера (в т.ч. 429 rate limit) не должны ронять процесс:
-
-      \    // пропускаем итерацию и, при rate limit, делаем короткую паузу.
-
-      \    let snapshot: BrokerSnapshot;
-
-      \    try {
-
-      \      snapshot = await this.buildSnapshot(broker);
-
-      \    } catch (error) {
-
-      \      this.pushError(
-
-      \        events,
-
-      \        userId,
-
-      \        normSymbol,
-
-      \        \"Ошибка получения состояния счёта (брокер недоступен)\",
-
-      \        error,
-
-      \        requestId
-
-      \      );
-
-      \      await this.maybeRateLimitBackoff(error);
-
-      \      return events;
-
-      \    }
-
-      \    const existing = snapshot.positions.find(
-
-      \      (position) => position.symbol.toUpperCase() === normSymbol
-
-      \    );
-
-
-      \    this.emit(
-
-      \      event(
-
-      \        \"diagnostic\",
-
-      \        userId,
-
-      \        normSymbol,
-
-      \        \"AI-анализ: сбор рыночных данных и запрос к DeepSeek\",
-
-      \        { source, requestId },
-
-      \        requestId
-
-      \      )
-
-      \    );
-
-      \    let analysis: AnalyzeResult<TradeSignal>;
-
-      \    try {
-
-      \      analysis = await this.deps.ai.analyzeSignal({
-
-      \        userId,
-
-      \        symbol: normSymbol,
-
-      \      });
-
-      \    } catch (error) {
-
-      \      this.pushError(
-
-      \        events,
-
-      \        userId,
-
-      \        normSymbol,
-
-      \        \"Ошибка AI-анализа\",
-
-      \        error,
-
-      \        requestId
-
-      \      );
-
-      \      await this.maybeRateLimitBackoff(error);
-
-      \      return events;
-
-      \    }
-
-
-      \    const signal = analysis.decision;
-
-      \    if (!signal) {
-
-      \      this.emit(
-
-      \        event(
-
-      \          \"signal\",
-
-      \          userId,
-
-      \          normSymbol,
-
-      \          \"AI: нет сигнала (hold/невалидный ответ)\",
-
-      \          { source, requestId },
-
-      \          requestId
-
-      \        )
-
-      \      );
-
-      \      return events;
-
-      \    }
-
-      \    this.emit(
-
-      \      event(
-
-      \        \"signal\",
-
-      \        userId,
-
-      \        normSymbol,
-
-      \        formatSignal(signal),
-
-      \        { source, confidence: signal.confidence, requestId },
-
-      \        requestId
-
-      \      )
-
-      \    );
-
-
-      \    const openSide = signalToSide(signal);
-
-
-      \    if (existing) {
-
-      \      // Закрытие существующей позиции.
-
-      \      if (
-
-      \        signal.action === \"hold\" ||
-
-      \        openSide === null ||
-
-      \        openSide === existing.side
-
-      \      ) {
-
-      \        return events;
-
-      \      }
-
-      \      const key = lockKey(
-
-      \        userId,
-
-      \        normSymbol,
-
-      \        `${existing.side}:close` as PositionSide
-
-      \      );
-
-      \      if (!(await this.deps.lockStore.acquire(key, this.lockTtlMs))) {
-
-      \        this.emit(
-
-      \          event(
-
-      \            \"dup_skip\",
-
-      \            userId,
-
-      \            normSymbol,
-
-      \            \"Пропуск: ордер на закрытие уже исполняется\",
-
-      \            { source, requestId },
-
-      \            requestId
-
-      \          )
-
-      \        );
-
-      \        return events;
-
-      \      }
-
-      \      try {
-
-      \        const receipt = await this.deps.executor.execute(broker, {
-
-      \          symbol: normSymbol,
-
-      \          side: existing.side,
-
-      \          action: \"close\",
-
-      \          quantity: existing.quantity,
-
-      \        });
-
-      \        this.emit(
-
-      \          event(
-
-      \            \"trade_close\",
-
-      \            userId,
-
-      \            normSymbol,
-
-      \            `Позиция закрыта по ${receipt.executedPrice}`,
-
-      \            { source, receipt, requestId },
-
-      \            requestId
-
-      \          )
-
-      \        );
-
-      \        await this.deps.audit?.tradeClose({
-
-      \          userId,
-
-      \          actorRole: \"system\",
-
-      \          requestId,
-
-      \          entityType: \"order\",
-
-      \          entityId: receipt.orderId,
-
-      \          details: {
-
-      \            symbol: normSymbol,
-
-      \            side: existing.side,
-
-      \            action: \"close\",
-
-      \            quantity: existing.quantity,
-
-      \            price: receipt.executedPrice,
-
-      \            executedAt: receipt.executedAt,
-
-      \            source,
-
-      \          },
-
-      \        });
-
-      \        await this.deps.learning.recordTradeClose({
-
-      \          userId,
-
-      \          symbol: normSymbol,
-
-      \          side: existing.side,
-
-      \          exitPrice: receipt.executedPrice,
-
-      \          closedAt: receipt.executedAt,
-
-      \        });
-
-      \      } catch (error) {
-
-      \        this.pushError(
-
-      \          events,
-
-      \          userId,
-
-      \          normSymbol,
-
-      \          \"Ошибка закрытия позиции\",
-
-      \          error,
-
-      \          requestId
-
-      \        );
-
-      \        await this.maybeRateLimitBackoff(error);
-
-      \      } finally {
-
-      \        await this.deps.lockStore.release(key);
-
-      \      }
-
-      \      return events;
-
-      \    }
-
-
-      \    // Нет позиции — рассматриваем открытие.
-
-      \    if (signal.action === \"hold\" || openSide === null) {
-
-      \      return events;
-
-      \    }
-
-
-      \    const key = lockKey(userId, normSymbol, openSide);
-
-      \    if (!(await this.deps.lockStore.acquire(key, this.lockTtlMs))) {
-
-      \      this.emit(
-
-      \        event(
-
-      \          \"dup_skip\",
-
-      \          userId,
-
-      \          normSymbol,
-
-      \          `Пропуск: блокировка ${normSymbol}/${openSide} уже занята`,
-
-      \          { source, requestId },
-
-      \          requestId
-
-      \        )
-
-      \      );
-
-      \      return events;
-
-      \    }
-
-
-      \    try {
-
-      \      const price = await this.currentPrice(normSymbol,
-      signal.entryPrice);
-
-      \      const effectiveRiskPercent = Math.min(
-
-      \        settings.riskPerTradePercent * aiModeMultiplier(settings.aiMode),
-
-      \        settings.riskPerTradePercent
-
-      \      );
-
-      \      const notional = Math.min(
-
-      \        (snapshot.account.balance * effectiveRiskPercent) / 100,
-
-      \        snapshot.account.availableCash
-
-      \      );
-
-      \      const decision = await this.deps.riskManager.checkOpenTrade(
-
-      \        userId,
-
-      \        normSymbol,
-
-      \        openSide,
-
-      \        notional,
-
-      \        snapshot,
-
-      \        settings
-
-      \      );
-
-
-      \      if (!decision.allow) {
-
-      \        const blockEvent = event(
-
-      \          \"risk_block\",
-
-      \          userId,
-
-      \          normSymbol,
-
-      \          decision.reason ?? \"блокировка\",
-
-      \          {
-
-      \            code: decision.code,
-
-      \            source,
-
-      \            snapshot: redactSnapshot(snapshot),
-
-      \            requestId,
-
-      \          },
-
-      \          requestId
-
-      \        );
-
-      \        this.emit(blockEvent);
-
-      \        void this.deps.audit?.tradeRejected({
-
-      \          userId,
-
-      \          actorRole: \"system\",
-
-      \          requestId,
-
-      \          entityType: \"order\",
-
-      \          entityId: normSymbol,
-
-      \          details: {
-
-      \            symbol: normSymbol,
-
-      \            side: openSide,
-
-      \            code: decision.code,
-
-      \            reason: decision.reason,
-
-      \            source,
-
-      \          },
-
-      \        });
-
-      \        if (decision.code === \"total_stop\") {
-
-      \          const currentSnapshot = await this.refreshSnapshot(broker,
-      snapshot);
-
-      \          const needsNotify =
-
-      \            await this.deps.riskManager.checkTotalStopNotification(
-
-      \              userId,
-
-      \              currentSnapshot
-
-      \            );
-
-      \          if (needsNotify) {
-
-      \            const msg = `🚨 ВНИМАНИЕ: торговля пользователя ${userId}
-      остановлена — превышена общая просадка.`;
-
-      \            this.deps.notifyAdmin?.(userId, msg);
-
-      \            this.emit(
-
-      \              event(
-
-      \                \"admin_notify\",
-
-      \                userId,
-
-      \                normSymbol,
-
-      \                msg,
-
-      \                { source, requestId },
-
-      \                requestId
-
-      \              )
-
-      \            );
-
-      \            await this.deps.audit?.riskState(\"trading.admin_notify\", {
-
-      \              userId,
-
-      \              actorRole: \"system\",
-
-      \              requestId,
-
-      \              entityType: \"trading_state\",
-
-      \              entityId: userId,
-
-      \              details: { message: msg, source },
-
-      \            });
-
-      \            await this.deps.audit?.riskState(\"trading.total_stop\", {
-
-      \              userId,
-
-      \              actorRole: \"system\",
-
-      \              requestId,
-
-      \              entityType: \"trading_state\",
-
-      \              entityId: userId,
-
-      \              details: { source },
-
-      \            });
-
-      \          }
-
-      \        }
-
-      \        return events;
-
-      \      }
-
-
-      \      const budget = Math.min(
-
-      \        decision.maxTradeNotional,
-
-      \        snapshot.account.availableCash
-
-      \      );
-
-      \      const quantity = roundQuantity(budget / price);
-
-      \      if (quantity <= 0) {
-
-      \        this.emit(
-
-      \          event(
-
-      \            \"risk_block\",
-
-      \            userId,
-
-      \            normSymbol,
-
-      \            \"Недостаточно средств для минимального объёма\",
-
-      \            {
-
-      \              code: \"margin_insufficient\",
-
-      \              source,
-
-      \              requestId,
-
-      \            },
-
-      \            requestId
-
-      \          )
-
-      \        );
-
-      \        void this.deps.audit?.tradeRejected({
-
-      \          userId,
-
-      \          actorRole: \"system\",
-
-      \          requestId,
-
-      \          entityType: \"order\",
-
-      \          entityId: normSymbol,
-
-      \          details: {
-
-      \            symbol: normSymbol,
-
-      \            side: openSide,
-
-      \            code: \"margin_insufficient\",
-
-      \            source,
-
-      \          },
-
-      \        });
-
-      \        return events;
-
-      \      }
-
-
-      \      const receipt = await this.deps.executor.execute(broker, {
-
-      \        symbol: normSymbol,
-
-      \        side: openSide,
-
-      \        action: \"open\",
-
-      \        quantity,
-
-      \        price,
-
-      \      });
-
-      \      await this.deps.riskManager.recordOpenedTrade(userId);
-
-      \      this.emit(
-
-      \        event(
-
-      \          \"trade_open\",
-
-      \          userId,
-
-      \          normSymbol,
-
-      \          `Открыта позиция ${openSide} ${quantity} по
-      ${receipt.executedPrice}`,
-
-      \          { source, receipt, quantity, requestId },
-
-      \          requestId
-
-      \        )
-
-      \      );
-
-      \      await this.deps.audit?.tradeOpen({
-
-      \        userId,
-
-      \        actorRole: \"system\",
-
-      \        requestId,
-
-      \        entityType: \"order\",
-
-      \        entityId: receipt.orderId,
-
-      \        details: {
-
-      \          symbol: normSymbol,
-
-      \          side: openSide,
-
-      \          action: \"open\",
-
-      \          quantity,
-
-      \          price: receipt.executedPrice,
-
-      \          executedAt: receipt.executedAt,
-
-      \          source,
-
-      \          signal: {
-
-      \            action: signal.action,
-
-      \            confidence: signal.confidence,
-
-      \            riskPercent: signal.riskPercent,
-
-      \          },
-
-      \        },
-
-      \      });
-
-      \      await this.deps.learning.recordTradeOpen({
-
-      \        userId,
-
-      \        symbol: normSymbol,
-
-      \        side: openSide,
-
-      \        market: analysis.market,
-
-      \        signal,
-
-      \        entryPrice: receipt.executedPrice,
-
-      \        quantity,
-
-      \        openedAt: receipt.executedAt,
-
-      \      });
-
-      \    } catch (error) {
-
-      \      this.pushError(
-
-      \        events,
-
-      \        userId,
-
-      \        normSymbol,
-
-      \        \"Ошибка исполнения ордера\",
-
-      \        error,
-
-      \        requestId
-
-      \      );
-
-      \      await this.maybeRateLimitBackoff(error);
-
-      \    } finally {
-
-      \      await this.deps.lockStore.release(key);
-
-      \    }
-
-
-      \    return events;
-
-      \  }
-
-
-      \  private async buildSnapshot(broker: BaseBroker):
-      Promise<BrokerSnapshot> {
-
-      \    const [account, positions] = await Promise.all([
-
-      \      broker.getAccount(),
-
-      \      broker.getPositions(),
-
-      \    ]);
-
-      \    return { account, positions };
-
-      \  }
-
-
-      \  /**
-
-      \   * Повторно запрашивает снимок счёта; при ошибке брокера возвращает
-
-      \   * предыдущий снимок, чтобы ветка обработки не падала.
-
-      \   */
-
-      \  private async refreshSnapshot(
-
-      \    broker: BaseBroker,
-
-      \    fallback: BrokerSnapshot
-
-      \  ): Promise<BrokerSnapshot> {
-
-      \    try {
-
-      \      return await this.buildSnapshot(broker);
-
-      \    } catch {
-
-      \      return fallback;
-
-      \    }
-
-      \  }
-
-
-      \  private async currentPrice(
-
-      \    symbol: string,
-
-      \    signalPrice: number | null
-
-      \  ): Promise<number> {
-
-      \    if (signalPrice && signalPrice > 0) {
-
-      \      return signalPrice;
-
-      \    }
-
-      \    try {
-
-      \      const candles = await this.deps.marketData.getCandles(symbol,
-      \"1h\", 2);
-
-      \      const last = candles[candles.length - 1];
-
-      \      if (last) {
-
-      \        return last.close;
-
-      \      }
-
-      \    } catch {
-
-      \      // fall through
-
-      \    }
-
-      \    return 1;
-
-      \  }
-
-
-      \  private pushError(
-
-      \    events: EngineEvent[],
-
-      \    userId: number,
-
-      \    symbol: string,
-
-      \    prefix: string,
-
-      \    error: unknown,
-
-      \    requestId?: string
-
-      \  ): void {
-
-      \    const message = `${prefix}: ${error instanceof Error ? error.message
-      : String(error)}`;
-
-      \    const eventValue = event(
-
-      \      \"error\",
-
-      \      userId,
-
-      \      symbol,
-
-      \      message,
-
-      \      undefined,
-
-      \      requestId
-
-      \    );
-
-      \    this.emit(eventValue);
-
-      \    events.push(eventValue);
-
-      \    void this.deps.audit
-
-      \      ?.tradeError({
-
-      \        userId,
-
-      \        actorRole: \"system\",
-
-      \        requestId: requestId ?? null,
-
-      \        entityType: \"order\",
-
-      \        entityId: symbol,
-
-      \        details: { symbol, error: message },
-
-      \      })
-
-      \      .catch(() => {
-
-      \        // Ошибка аудита не должна влиять на торговый цикл.
-
-      \      });
-
-      \  }
-
-
-      \  private sleep(ms: number): Promise<void> {
-
-      \    return new Promise((resolve) => setTimeout(resolve, ms));
-
-      \  }
-
-
-      \  /**
-
-      \   * При ошибке rate limit брокера (429) делает короткую паузу, чтобы не
-
-      \   * долбить API подряд в следующей итерации цикла.
-
-      \   */
-
-      \  private async maybeRateLimitBackoff(error: unknown): Promise<void> {
-
-      \    if (error instanceof UpscaleApiError && error.statusCode === 429) {
-
-      \      await this.sleep(RATE_LIMIT_BACKOFF_MS);
-
-      \    }
-
-      \  }
-
+        private readonly decisionIntervalMs: number;
+        private readonly lockTtlMs: number;
+        private readonly supportedSymbols: readonly string[];
+        private timer: ReturnType<typeof setInterval> | null = null;
+        private running = false;
+
+        constructor(private readonly deps: TradingCoreDeps) {
+          this.decisionIntervalMs =
+            deps.decisionIntervalMs ?? DEFAULT_DECISION_INTERVAL_MS;
+          this.lockTtlMs = deps.lockTtlMs ?? DEFAULT_LOCK_TTL_MS;
+          this.supportedSymbols = [...deps.supportedSymbols];
+        }
+
+        /** Запускает цикл решений по таймеру. */
+        start(): void {
+          if (this.running) {
+            return;
+          }
+          this.running = true;
+          this.emit(
+            event(
+              "diagnostic",
+              0,
+              "",
+              `торговый цикл запущен: интервал ${this.decisionIntervalMs} мс`,
+              {
+                decisionIntervalMs: this.decisionIntervalMs,
+                lockTtlMs: this.lockTtlMs,
+                symbols: this.supportedSymbols,
+              },
+              createRequestId()
+            )
+          );
+          // Первый тик выполняем сразу после старта, а не дожидаясь первого
+          // интервала (по умолчанию 5 минут): иначе после перезапуска бота, пока
+          // дойдёт первый tick, торговый цикл молчит, и в логах видны только строки
+          // запуска.
+          void this.tick().catch((error) => this.onTickFatal(error));
+          this.timer = setInterval(() => {
+            void this.tick().catch((error) => this.onTickFatal(error));
+          }, this.decisionIntervalMs);
+          this.timer.unref?.();
+        }
+
+        /** Останавливает таймер. Команда-резерв для /global_pause. */
+        stopPumping(): void {
+          if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = null;
+          }
+          this.running = false;
+        }
+
+        /**
+         * Последняя линия защиты: исключение никогда не должно выходить из tick()
+         * в `void this.tick()` (иначе unhandled rejection роняет процесс).
+         */
+        private onTickFatal(error: unknown): void {
+          const requestId = createRequestId();
+          try {
+            this.emit(
+              event(
+                "error",
+                0,
+                "",
+                `Необработанная ошибка торгового цикла: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+                { requestId },
+                requestId
+              )
+            );
+          } catch {
+            // Ошибка наблюдателя не должна ронять процесс.
+          }
+        }
+
+        /** Полный цикл решений по таймеру для всех пользователей и символов. */
+        async tick(): Promise<void> {
+          const requestId = createRequestId();
+          let userIds: number[];
+          try {
+            userIds = await this.deps.resolveUserIds();
+          } catch (error) {
+            // Если БД/репозиторий подключений недоступен — цикл не должен молча
+            // пропускать итерацию: пишем ошибку, чтобы причина была видна в логах.
+            this.emit(
+              event(
+                "error",
+                0,
+                "",
+                `Ошибка чтения списка подключённых пользователей: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+                { source: "timer" },
+                requestId
+              )
+            );
+            return;
+          }
+
+          if (userIds.length === 0) {
+            // Самая частая причина «пустых» логов: боту не для кого торговать.
+            // Пишем диагностику, чтобы это было очевидно, а не молчанием.
+            this.emit(
+              event(
+                "diagnostic",
+                0,
+                "",
+                "торговый цикл: нет подключённых пользователей (выполните /connect в боте)",
+                { source: "timer" },
+                requestId
+              )
+            );
+            return;
+          }
+
+          for (const userId of userIds) {
+            let symbols: string[];
+            try {
+              symbols = await this.symbolsForUser(userId);
+            } catch (error) {
+              this.emit(
+                event(
+                  "error",
+                  userId,
+                  "",
+                  `Ошибка чтения настроек пользователя ${userId}: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+                  { source: "timer" },
+                  requestId
+                )
+              );
+              continue;
+            }
+            if (symbols.length === 0) {
+              // Тихая ветка: пользователь есть, но whitelist не совпадает ни с
+              // одним поддерживаемым символом. Раньше цикл молча ничего не делал.
+              this.emit(
+                event(
+                  "diagnostic",
+                  userId,
+                  "",
+                  "торговый цикл: у пользователя нет символов для торговли (whitelist не пересекается с поддерживаемыми)",
+                  { source: "timer" },
+                  requestId
+                )
+              );
+              continue;
+            }
+            for (const symbol of symbols) {
+              try {
+                await this.evaluateSymbol(userId, symbol, "timer");
+              } catch (error) {
+                this.emit(
+                  event(
+                    "error",
+                    userId,
+                    symbol,
+                    `Необработанная ошибка обработки ${symbol}: ${
+                      error instanceof Error ? error.message : String(error)
+                    }`,
+                    { source: "timer" },
+                    requestId
+                  )
+                );
+              }
+            }
+          }
+        }
+
+        /** Событие: закрытие свечи. */
+        async onCandleClose(symbol: string, _timeframe?: string): Promise<void> {
+          await this.runForEvent(symbol, "candle_close");
+        }
+
+        /** Событие: резкое движение цены (процент и направление). */
+        async onSharpMove(symbol: string, percent: number): Promise<void> {
+          const threshold = 2;
+          if (Math.abs(percent) < threshold) {
+            return;
+          }
+          await this.runForEvent(symbol, "sharp_move");
+        }
+
+        private async runForEvent(symbol: string, source: string): Promise<void> {
+          let userIds: number[];
+          try {
+            userIds = await this.deps.resolveUserIds();
+          } catch (error) {
+            this.emit(
+              event(
+                "error",
+                0,
+                symbol,
+                `Ошибка чтения списка подключённых пользователей: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+                { source },
+                createRequestId()
+              )
+            );
+            return;
+          }
+          for (const userId of userIds) {
+            try {
+              const settings = await this.deps.riskManager.getSettings(userId);
+              if (isSymbolAllowed(settings, symbol)) {
+                await this.evaluateSymbol(userId, symbol, source);
+              }
+            } catch (error) {
+              this.emit(
+                event(
+                  "error",
+                  userId,
+                  symbol,
+                  `Необработанная ошибка обработки события ${source}: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+                  { source },
+                  createRequestId()
+                )
+              );
+            }
+          }
+        }
+
+        private async symbolsForUser(userId: number): Promise<string[]> {
+          const settings = await this.deps.riskManager.getSettings(userId);
+          if (settings.symbols.length > 0) {
+            return this.supportedSymbols.filter((symbol) =>
+              isSymbolAllowed(settings, symbol)
+            );
+          }
+          return [...this.supportedSymbols];
+        }
+
+        private emit(event: EngineEvent): void {
+          this.deps.onEvent?.(event);
+        }
+
+        /**
+         * Цикл решений для одного пользователя и символа: анализ AI, риск-контроль,
+         * исполнение ордера под защитой от дублей.
+         */
+        async evaluateSymbol(
+          userId: number,
+          symbol: string,
+          source: string
+        ): Promise<EngineEvent[]> {
+          const normSymbol = symbol.trim().toUpperCase();
+          const requestId = createRequestId();
+          const events: EngineEvent[] = [];
+
+          // Глобальная пауза админом (/global_pause) останавливает торговлю у всех.
+          if (await this.deps.isGlobalPaused?.()) {
+            this.emit(
+              event(
+                "diagnostic",
+                userId,
+                normSymbol,
+                "пропуск: глобальная пауза (/global_pause)",
+                { source },
+                requestId
+              )
+            );
+            return events;
+          }
+
+          let broker: BaseBroker | null;
+          try {
+            broker = await this.deps.resolveBroker(userId);
+          } catch (error) {
+            this.pushError(
+              events,
+              userId,
+              normSymbol,
+              "Ошибка получения клиента брокера",
+              error,
+              requestId
+            );
+            return events;
+          }
+
+          if (!broker) {
+            this.emit(
+              event(
+                "diagnostic",
+                userId,
+                normSymbol,
+                "пропуск: брокер не подключён (выполните /connect)",
+                { source },
+                requestId
+              )
+            );
+            return events;
+          }
+
+          let settings: TradingSettings;
+          try {
+            settings = await this.deps.riskManager.getSettings(userId);
+          } catch (error) {
+            this.pushError(
+              events,
+              userId,
+              normSymbol,
+              "Ошибка чтения настроек торговли",
+              error,
+              requestId
+            );
+            return events;
+          }
+          if (!isSymbolAllowed(settings, normSymbol)) {
+            this.emit(
+              event(
+                "diagnostic",
+                userId,
+                normSymbol,
+                "пропуск: символ не разрешён настройками (/settings symbols=...)",
+                { source },
+                requestId
+              )
+            );
+            return events;
+          }
+
+          // Ошибки брокера (в т.ч. 429 rate limit) не должны ронять процесс:
+          // пропускаем итерацию и, при rate limit, делаем короткую паузу.
+          let snapshot: BrokerSnapshot;
+          try {
+            snapshot = await this.buildSnapshot(broker);
+          } catch (error) {
+            this.pushError(
+              events,
+              userId,
+              normSymbol,
+              "Ошибка получения состояния счёта (брокер недоступен)",
+              error,
+              requestId
+            );
+            await this.maybeRateLimitBackoff(error);
+            return events;
+          }
+          const existing = snapshot.positions.find(
+            (position) => position.symbol.toUpperCase() === normSymbol
+          );
+
+          this.emit(
+            event(
+              "diagnostic",
+              userId,
+              normSymbol,
+              "AI-анализ: сбор рыночных данных и запрос к DeepSeek",
+              { source, requestId },
+              requestId
+            )
+          );
+          let analysis: AnalyzeResult<TradeSignal>;
+          try {
+            analysis = await this.deps.ai.analyzeSignal({
+              userId,
+              symbol: normSymbol,
+            });
+          } catch (error) {
+            this.pushError(
+              events,
+              userId,
+              normSymbol,
+              "Ошибка AI-анализа",
+              error,
+              requestId
+            );
+            await this.maybeRateLimitBackoff(error);
+            return events;
+          }
+
+          const signal = analysis.decision;
+          if (!signal) {
+            this.emit(
+              event(
+                "signal",
+                userId,
+                normSymbol,
+                "AI: нет сигнала (hold/невалидный ответ)",
+                { source, requestId },
+                requestId
+              )
+            );
+            return events;
+          }
+          this.emit(
+            event(
+              "signal",
+              userId,
+              normSymbol,
+              formatSignal(signal),
+              { source, confidence: signal.confidence, requestId },
+              requestId
+            )
+          );
+
+          const openSide = signalToSide(signal);
+
+          if (existing) {
+            // Закрытие существующей позиции.
+            if (
+              signal.action === "hold" ||
+              openSide === null ||
+              openSide === existing.side
+            ) {
+              return events;
+            }
+            const key = lockKey(
+              userId,
+              normSymbol,
+              `${existing.side}:close` as PositionSide
+            );
+            if (!(await this.deps.lockStore.acquire(key, this.lockTtlMs))) {
+              this.emit(
+                event(
+                  "dup_skip",
+                  userId,
+                  normSymbol,
+                  "Пропуск: ордер на закрытие уже исполняется",
+                  { source, requestId },
+                  requestId
+                )
+              );
+              return events;
+            }
+            try {
+              const receipt = await this.deps.executor.execute(broker, {
+                symbol: normSymbol,
+                side: existing.side,
+                action: "close",
+                quantity: existing.quantity,
+              });
+              this.emit(
+                event(
+                  "trade_close",
+                  userId,
+                  normSymbol,
+                  `Позиция закрыта по ${receipt.executedPrice}`,
+                  { source, receipt, requestId },
+                  requestId
+                )
+              );
+              await this.deps.audit?.tradeClose({
+                userId,
+                actorRole: "system",
+                requestId,
+                entityType: "order",
+                entityId: receipt.orderId,
+                details: {
+                  symbol: normSymbol,
+                  side: existing.side,
+                  action: "close",
+                  quantity: existing.quantity,
+                  price: receipt.executedPrice,
+                  executedAt: receipt.executedAt,
+                  source,
+                },
+              });
+              await this.deps.learning.recordTradeClose({
+                userId,
+                symbol: normSymbol,
+                side: existing.side,
+                exitPrice: receipt.executedPrice,
+                closedAt: receipt.executedAt,
+              });
+            } catch (error) {
+              this.pushError(
+                events,
+                userId,
+                normSymbol,
+                "Ошибка закрытия позиции",
+                error,
+                requestId
+              );
+              await this.maybeRateLimitBackoff(error);
+            } finally {
+              await this.deps.lockStore.release(key);
+            }
+            return events;
+          }
+
+          // Нет позиции — рассматриваем открытие.
+          if (signal.action === "hold" || openSide === null) {
+            return events;
+          }
+
+          const key = lockKey(userId, normSymbol, openSide);
+          if (!(await this.deps.lockStore.acquire(key, this.lockTtlMs))) {
+            this.emit(
+              event(
+                "dup_skip",
+                userId,
+                normSymbol,
+                `Пропуск: блокировка ${normSymbol}/${openSide} уже занята`,
+                { source, requestId },
+                requestId
+              )
+            );
+            return events;
+          }
+
+          try {
+            const price = await this.currentPrice(normSymbol, signal.entryPrice);
+            const effectiveRiskPercent = Math.min(
+              settings.riskPerTradePercent * aiModeMultiplier(settings.aiMode),
+              settings.riskPerTradePercent
+            );
+            const notional = Math.min(
+              (snapshot.account.balance * effectiveRiskPercent) / 100,
+              snapshot.account.availableCash
+            );
+            const decision = await this.deps.riskManager.checkOpenTrade(
+              userId,
+              normSymbol,
+              openSide,
+              notional,
+              snapshot,
+              settings
+            );
+
+            if (!decision.allow) {
+              const blockEvent = event(
+                "risk_block",
+                userId,
+                normSymbol,
+                decision.reason ?? "блокировка",
+                {
+                  code: decision.code,
+                  source,
+                  snapshot: redactSnapshot(snapshot),
+                  requestId,
+                },
+                requestId
+              );
+              this.emit(blockEvent);
+              void this.deps.audit?.tradeRejected({
+                userId,
+                actorRole: "system",
+                requestId,
+                entityType: "order",
+                entityId: normSymbol,
+                details: {
+                  symbol: normSymbol,
+                  side: openSide,
+                  code: decision.code,
+                  reason: decision.reason,
+                  source,
+                },
+              });
+              if (decision.code === "total_stop") {
+                const currentSnapshot = await this.refreshSnapshot(broker, snapshot);
+                const needsNotify =
+                  await this.deps.riskManager.checkTotalStopNotification(
+                    userId,
+                    currentSnapshot
+                  );
+                if (needsNotify) {
+                  const msg = `🚨 ВНИМАНИЕ: торговля пользователя ${userId} остановлена — превышена общая просадка.`;
+                  this.deps.notifyAdmin?.(userId, msg);
+                  this.emit(
+                    event(
+                      "admin_notify",
+                      userId,
+                      normSymbol,
+                      msg,
+                      { source, requestId },
+                      requestId
+                    )
+                  );
+                  await this.deps.audit?.riskState("trading.admin_notify", {
+                    userId,
+                    actorRole: "system",
+                    requestId,
+                    entityType: "trading_state",
+                    entityId: userId,
+                    details: { message: msg, source },
+                  });
+                  await this.deps.audit?.riskState("trading.total_stop", {
+                    userId,
+                    actorRole: "system",
+                    requestId,
+                    entityType: "trading_state",
+                    entityId: userId,
+                    details: { source },
+                  });
+                }
+              }
+              return events;
+            }
+
+            const budget = Math.min(
+              decision.maxTradeNotional,
+              snapshot.account.availableCash
+            );
+            const quantity = roundQuantity(budget / price);
+            if (quantity <= 0) {
+              this.emit(
+                event(
+                  "risk_block",
+                  userId,
+                  normSymbol,
+                  "Недостаточно средств для минимального объёма",
+                  {
+                    code: "margin_insufficient",
+                    source,
+                    requestId,
+                  },
+                  requestId
+                )
+              );
+              void this.deps.audit?.tradeRejected({
+                userId,
+                actorRole: "system",
+                requestId,
+                entityType: "order",
+                entityId: normSymbol,
+                details: {
+                  symbol: normSymbol,
+                  side: openSide,
+                  code: "margin_insufficient",
+                  source,
+                },
+              });
+              return events;
+            }
+
+            const receipt = await this.deps.executor.execute(broker, {
+              symbol: normSymbol,
+              side: openSide,
+              action: "open",
+              quantity,
+              price,
+            });
+            await this.deps.riskManager.recordOpenedTrade(userId);
+            this.emit(
+              event(
+                "trade_open",
+                userId,
+                normSymbol,
+                `Открыта позиция ${openSide} ${quantity} по ${receipt.executedPrice}`,
+                { source, receipt, quantity, requestId },
+                requestId
+              )
+            );
+            await this.deps.audit?.tradeOpen({
+              userId,
+              actorRole: "system",
+              requestId,
+              entityType: "order",
+              entityId: receipt.orderId,
+              details: {
+                symbol: normSymbol,
+                side: openSide,
+                action: "open",
+                quantity,
+                price: receipt.executedPrice,
+                executedAt: receipt.executedAt,
+                source,
+                signal: {
+                  action: signal.action,
+                  confidence: signal.confidence,
+                  riskPercent: signal.riskPercent,
+                },
+              },
+            });
+            await this.deps.learning.recordTradeOpen({
+              userId,
+              symbol: normSymbol,
+              side: openSide,
+              market: analysis.market,
+              signal,
+              entryPrice: receipt.executedPrice,
+              quantity,
+              openedAt: receipt.executedAt,
+            });
+          } catch (error) {
+            this.pushError(
+              events,
+              userId,
+              normSymbol,
+              "Ошибка исполнения ордера",
+              error,
+              requestId
+            );
+            await this.maybeRateLimitBackoff(error);
+          } finally {
+            await this.deps.lockStore.release(key);
+          }
+
+          return events;
+        }
+
+        private async buildSnapshot(broker: BaseBroker): Promise<BrokerSnapshot> {
+          const [account, positions] = await Promise.all([
+            broker.getAccount(),
+            broker.getPositions(),
+          ]);
+          return { account, positions };
+        }
+
+        /**
+         * Повторно запрашивает снимок счёта; при ошибке брокера возвращает
+         * предыдущий снимок, чтобы ветка обработки не падала.
+         */
+        private async refreshSnapshot(
+          broker: BaseBroker,
+          fallback: BrokerSnapshot
+        ): Promise<BrokerSnapshot> {
+          try {
+            return await this.buildSnapshot(broker);
+          } catch {
+            return fallback;
+          }
+        }
+
+        private async currentPrice(
+          symbol: string,
+          signalPrice: number | null
+        ): Promise<number> {
+          if (signalPrice && signalPrice > 0) {
+            return signalPrice;
+          }
+          try {
+            const candles = await this.deps.marketData.getCandles(symbol, "1h", 2);
+            const last = candles[candles.length - 1];
+            if (last) {
+              return last.close;
+            }
+          } catch {
+            // fall through
+          }
+          return 1;
+        }
+
+        private pushError(
+          events: EngineEvent[],
+          userId: number,
+          symbol: string,
+          prefix: string,
+          error: unknown,
+          requestId?: string
+        ): void {
+          const message = `${prefix}: ${error instanceof Error ? error.message : String(error)}`;
+          const eventValue = event(
+            "error",
+            userId,
+            symbol,
+            message,
+            undefined,
+            requestId
+          );
+          this.emit(eventValue);
+          events.push(eventValue);
+          void this.deps.audit
+            ?.tradeError({
+              userId,
+              actorRole: "system",
+              requestId: requestId ?? null,
+              entityType: "order",
+              entityId: symbol,
+              details: { symbol, error: message },
+            })
+            .catch(() => {
+              // Ошибка аудита не должна влиять на торговый цикл.
+            });
+        }
+
+        private sleep(ms: number): Promise<void> {
+          return new Promise((resolve) => setTimeout(resolve, ms));
+        }
+
+        /**
+         * При ошибке rate limit брокера (429) делает короткую паузу, чтобы не
+         * долбить API подряд в следующей итерации цикла.
+         */
+        private async maybeRateLimitBackoff(error: unknown): Promise<void> {
+          if (error instanceof UpscaleApiError && error.statusCode === 429) {
+            await this.sleep(RATE_LIMIT_BACKOFF_MS);
+          }
+        }
       }
 
 
       function event(
-
-      \  type: EngineEventType,
-
-      \  userId: number,
-
-      \  symbol: string,
-
-      \  message: string,
-
-      \  data?: Record<string, unknown>,
-
-      \  requestId?: string
-
+        type: EngineEventType,
+        userId: number,
+        symbol: string,
+        message: string,
+        data?: Record<string, unknown>,
+        requestId?: string
       ): EngineEvent {
-
-      \  return {
-
-      \    type,
-
-      \    userId,
-
-      \    symbol,
-
-      \    message,
-
-      \    data,
-
-      \    at: new Date().toISOString(),
-
-      \    requestId,
-
-      \  };
-
+        return {
+          type,
+          userId,
+          symbol,
+          message,
+          data,
+          at: new Date().toISOString(),
+          requestId,
+        };
       }
 
 
       function lockKey(
-
-      \  userId: number,
-
-      \  symbol: string,
-
-      \  direction: PositionSide
-
+        userId: number,
+        symbol: string,
+        direction: PositionSide
       ): string {
-
-      \  return `trade:${userId}:${symbol}:${direction}`;
-
+        return `trade:${userId}:${symbol}:${direction}`;
       }
 
 
       function signalToSide(signal: TradeSignal): PositionSide | null {
-
-      \  if (signal.action === \"buy\" && signal.side === \"long\") {
-
-      \    return \"long\";
-
-      \  }
-
-      \  if (signal.action === \"sell\" && signal.side === \"short\") {
-
-      \    return \"short\";
-
-      \  }
-
-      \  return null;
-
+        if (signal.action === "buy" && signal.side === "long") {
+          return "long";
+        }
+        if (signal.action === "sell" && signal.side === "short") {
+          return "short";
+        }
+        return null;
       }
 
 
       function formatSignal(signal: TradeSignal): string {
-
-      \  return `AI: сигнал ${signal.action}/${signal.side}, уверенность
-      ${signal.confidence}%, риск ${signal.riskPercent}%`;
-
+        return `AI: сигнал ${signal.action}/${signal.side}, уверенность ${signal.confidence}%, риск ${signal.riskPercent}%`;
       }
 
 
       function redactSnapshot(snapshot: BrokerSnapshot): {
-
-      \  balance: number;
-
-      \  positions: number;
-
+        balance: number;
+        positions: number;
       } {
-
-      \  return {
-
-      \    balance: snapshot.account.balance,
-
-      \    positions: snapshot.positions.length,
-
-      \  };
-
+        return {
+          balance: snapshot.account.balance,
+          positions: snapshot.positions.length,
+        };
       }
 
       EOF
@@ -1891,643 +1020,364 @@ tasks:
 
       cat > bot/bot.ts << 'EOF'
 
-      import { Telegraf } from \"telegraf\";
+      import { Telegraf } from "telegraf";
 
-      import { BrokerService } from \"../broker\";
+      import { BrokerService } from "../broker";
 
-      import type { BotConfig } from \"../core/config\";
+      import type { BotConfig } from "../core/config";
 
-      import { isAdmin } from \"../core/config\";
+      import { isAdmin } from "../core/config";
 
-      import { createCrypto } from \"../core/crypto\";
+      import { createCrypto } from "../core/crypto";
 
       import {
+        createDynamoDbBrokerRepository,
+        createDynamoDbGlobalStateRepository,
+        createDynamoDbTradingSettingsRepository,
+        createDynamoDbTradingStateRepository,
+        createDynamoDbTradingSnapshotRepository,
+        createDynamoDbLearningReportRepository,
+        createDynamoDbStrategyRepository,
+        createDynamoDbStrategyStateRepository,
+        createDynamoDbUserRepository,
+        createDynamoDbAuditRepository,
+        createInMemoryBrokerRepository,
+        createInMemoryGlobalStateRepository,
+        createInMemoryTradingSettingsRepository,
+        createInMemoryTradingStateRepository,
+        createInMemoryTradingSnapshotRepository,
+        createInMemoryLearningReportRepository,
+        createInMemoryStrategyRepository,
+        createInMemoryStrategyStateRepository,
+        createInMemoryUserRepository,
+        createInMemoryAuditRepository,
+      } from "../db";
 
-      \  createDynamoDbBrokerRepository,
+      import { isDatabaseAvailable } from "../lib/db";
 
-      \  createDynamoDbGlobalStateRepository,
+      import { registerAccountHandlers } from "./account";
 
-      \  createDynamoDbTradingSettingsRepository,
+      import { registerAdminHandlers } from "../admin";
 
-      \  createDynamoDbTradingStateRepository,
+      import { formatHelp } from "./commands";
 
-      \  createDynamoDbTradingSnapshotRepository,
+      import { registerConnectHandlers } from "./connect";
 
-      \  createDynamoDbLearningReportRepository,
+      import { registerControlHandlers } from "./control";
 
-      \  createDynamoDbStrategyRepository,
+      import { registerStrategyHandlers } from "./strategy";
 
-      \  createDynamoDbStrategyStateRepository,
+      import { START_TEXT } from "./messages";
 
-      \  createDynamoDbUserRepository,
-
-      \  createDynamoDbAuditRepository,
-
-      \  createInMemoryBrokerRepository,
-
-      \  createInMemoryGlobalStateRepository,
-
-      \  createInMemoryTradingSettingsRepository,
-
-      \  createInMemoryTradingStateRepository,
-
-      \  createInMemoryTradingSnapshotRepository,
-
-      \  createInMemoryLearningReportRepository,
-
-      \  createInMemoryStrategyRepository,
-
-      \  createInMemoryStrategyStateRepository,
-
-      \  createInMemoryUserRepository,
-
-      \  createInMemoryAuditRepository,
-
-      } from \"../db\";
-
-      import { isDatabaseAvailable } from \"../lib/db\";
-
-      import { registerAccountHandlers } from \"./account\";
-
-      import { registerAdminHandlers } from \"../admin\";
-
-      import { formatHelp } from \"./commands\";
-
-      import { registerConnectHandlers } from \"./connect\";
-
-      import { registerControlHandlers } from \"./control\";
-
-      import { registerStrategyHandlers } from \"./strategy\";
-
-      import { START_TEXT } from \"./messages\";
-
-      import { createConnectSessionStore } from \"./sessions\";
+      import { createConnectSessionStore } from "./sessions";
 
       import { attachRequestContext, getRequestContext } from
-      \"./request-context\";
+      "./request-context";
 
-      import { defaultLogger } from \"../core/logger\";
+      import { defaultLogger } from "../core/logger";
 
-      import { AuditService } from \"../core/audit\";
+      import { AuditService } from "../core/audit";
 
-      import { SubscriptionService } from \"../subscriptions\";
+      import { SubscriptionService } from "../subscriptions";
 
-      import { DeepSeekClient } from \"../ai/deepseek\";
+      import { DeepSeekClient } from "../ai/deepseek";
 
-      import { OpenRouterClient } from \"../ai/openrouter\";
+      import { OpenRouterClient } from "../ai/openrouter";
 
       import {
-
-      \  AiAnalysisService,
-
-      \  BrokerPortfolioProvider,
-
-      \  KNOWN_SYMBOLS,
-
-      \  StubMarketDataProvider,
-
-      } from \"../ai\";
+        AiAnalysisService,
+        BrokerPortfolioProvider,
+        KNOWN_SYMBOLS,
+        StubMarketDataProvider,
+      } from "../ai";
 
       import { createDynamoDbAiDecisionRepository } from
-      \"../db/ai-decision-repository\";
+      "../db/ai-decision-repository";
 
       import { createInMemoryAiDecisionRepository } from
-      \"../db/ai-decision-repository\";
+      "../db/ai-decision-repository";
 
-      import { RiskManager } from \"../engine/risk-manager\";
+      import { RiskManager } from "../engine/risk-manager";
 
-      import { OrderExecutor } from \"../engine/executor\";
+      import { OrderExecutor } from "../engine/executor";
 
-      import { createInMemoryLockStore } from \"../engine/lock\";
+      import { createInMemoryLockStore } from "../engine/lock";
 
-      import type { TradingSettingsDefaults } from \"../engine/settings\";
+      import type { TradingSettingsDefaults } from "../engine/settings";
 
-      import { TradingCore } from \"../engine/trading-core\";
+      import { TradingCore } from "../engine/trading-core";
 
-      import { LearningService } from \"../learning\";
+      import { LearningService } from "../learning";
 
-      import { startDailyLearningScheduler } from \"../learning\";
+      import { startDailyLearningScheduler } from "../learning";
 
 
       export async function createBot(config: BotConfig): Promise<Telegraf> {
-
-      \  const bot = new Telegraf(config.telegramToken);
-
-
-      \  // Структурированные логи и аудит: requestId прикрепляется к каждому
-
-      \  // входящему апдейту Telegram и пробрасывается в логи и audit_log.
-
-      \  bot.use(async (ctx, next) => {
-
-      \    attachRequestContext(ctx);
-
-      \    return next();
-
-      \  });
-
-
-      \  // Персистентность: предпочитаем DynamoDB, чтобы подключения брокера,
-
-      \  // подписки, настройки и состояние торговли переживали рестарт бота.
-
-      \  // Если БД недоступна — фолбэк на in-memory (бота можно запускать и без
-
-      \  // DynamoDB, но данные не переживают перезапуск).
-
-      \  const dbAvailable = await isDatabaseAvailable().catch(() => false);
-
-      \  defaultLogger.info(\"выбран источник данных для бота\", {
-
-      \    storage: dbAvailable ? \"dynamodb\" : \"in-memory\",
-
-      \  });
-
-      \  const chooseRepo = <T>(dbRepo: T, memoryRepo: T): T =>
-
-      \    dbAvailable ? dbRepo : memoryRepo;
-
-
-      \  const audit = new AuditService(
-
-      \    chooseRepo(createDynamoDbAuditRepository(),
-      createInMemoryAuditRepository())
-
-      \  );
-
-      \  const crypto = createCrypto(config.encryptionKey);
-
-      \  const repository = chooseRepo(
-
-      \    createDynamoDbBrokerRepository(),
-
-      \    createInMemoryBrokerRepository()
-
-      \  );
-
-      \  const sessions = createConnectSessionStore();
-
-      \  const service = new BrokerService({
-
-      \    crypto,
-
-      \    repository,
-
-      \    brokerType: config.brokerType,
-
-      \    brokerApiBaseUrl: config.brokerApiBaseUrl,
-
-      \    brokerApiKeyHeader: config.brokerApiKeyHeader,
-
-      \    audit,
-
-      \  });
-
-
-      \  // Подписки и админ-панель: роли admin/subscriber/guest, защита
-      хендлеров.
-
-      \  const subscriptions = new SubscriptionService({
-
-      \    users: chooseRepo(
-
-      \      createDynamoDbUserRepository(),
-
-      \      createInMemoryUserRepository()
-
-      \    ),
-
-      \    global: chooseRepo(
-
-      \      createDynamoDbGlobalStateRepository(),
-
-      \      createInMemoryGlobalStateRepository()
-
-      \    ),
-
-      \    adminIds: config.adminTelegramIds,
-
-      \  });
-
-
-      \  // Публичные команды, доступные без активной подписки. Админ-команды
-
-      \  // проверяют ADMIN_TELEGRAM_IDS в своих хендлерах.
-
-      \  const PUBLIC_COMMANDS = new Set([
-
-      \    \"start\",
-
-      \    \"help\",
-
-      \    \"cancel\",
-
-      \    \"admin\",
-
-      \    \"grant\",
-
-      \    \"revoke\",
-
-      \    \"users\",
-
-      \    \"broadcast\",
-
-      \    \"global_pause\",
-
-      \  ]);
-
-
-      \  bot.use(async (ctx, next) => {
-
-      \    const userId = ctx.from?.id;
-
-      \    const { requestId, logger } = getRequestContext(ctx);
-
-      \    if (userId == null) {
-
-      \      return next();
-
-      \    }
-
-
-      \    // Админам не нужна подписка — пропускаем.
-
-      \    if (subscriptions.isAdmin(userId)) {
-
-      \      return next();
-
-      \    }
-
-
-      \    await subscriptions.touch(userId, ctx.from?.username ?? null);
-
-
-      \    const text = ctx.message && \"text\" in ctx.message ?
-      ctx.message.text : \"\";
-
-      \    if (text.startsWith(\"/\")) {
-
-      \      const command = text.split(/\\s+/)[0]!.slice(1).toLowerCase();
-
-      \      if (PUBLIC_COMMANDS.has(command)) {
-
-      \        return next();
-
-      \      }
-
-      \    }
-
-
-      \    // Защищённый хендлер: без активной подписки доступ закрыт.
-
-      \    if (!(await subscriptions.hasActiveSubscription(userId))) {
-
-      \      logger.warn(\"доступ запрещён: подписка не активна\", {
-
-      \        userId,
-
-      \        requestId,
-
-      \        text: text.slice(0, 120) || undefined,
-
-      \      });
-
-      \      await ctx.reply(
-
-      \        \"Доступ по подписке: подписка не активна. Обратитесь к
-      администратору.\"
-
-      \      );
-
-      \      return;
-
-      \    }
-
-
-      \    return next();
-
-      \  });
-
-
-      \  registerConnectHandlers(bot, { service, sessions });
-
-      \  registerAccountHandlers(bot, { service });
-
-      \  registerAdminHandlers(bot, {
-
-      \    subscriptions,
-
-      \    isAdmin: (userId) => subscriptions.isAdmin(userId),
-
-      \    audit,
-
-      \  });
-
-
-      \  // Торговое ядро и риск-контроль.
-
-      \  const deepseek = new DeepSeekClient({
-
-      \    apiKey: config.deepSeekApiKey,
-
-      \    baseUrl: config.deepSeekBaseUrl,
-
-      \    chatModel: config.deepSeekChatModel,
-
-      \    reasonerModel: config.deepSeekReasonerModel,
-
-      \  });
-
-      \  // Fallback AI-провайдер OpenRouter. Если OPENROUTER_API_KEY не задан —
-
-      \  // работает только DeepSeek, как раньше.
-
-      \  const openrouter = config.openRouterApiKey
-
-      \    ? new OpenRouterClient({
-
-      \        apiKey: config.openRouterApiKey,
-
-      \        model: config.openRouterModel,
-
-      \      })
-
-      \    : undefined;
-
-      \  const marketData = new StubMarketDataProvider();
-
-      \  const portfolio = new BrokerPortfolioProvider({
-
-      \    getBroker: (userId) => service.getBrokerForUser(userId),
-
-      \  });
-
-      \  const ai = new AiAnalysisService({
-
-      \    marketData,
-
-      \    deepseek,
-
-      \    openrouter,
-
-      \    portfolio,
-
-      \    repository: chooseRepo(
-
-      \      createDynamoDbAiDecisionRepository(),
-
-      \      createInMemoryAiDecisionRepository()
-
-      \    ),
-
-      \  });
-
-
-      \  // Дефолтные значения настроек торговли из .env
-      (DEFAULT_RISK_PER_TRADE,
-
-      \  // MAX_POSITIONS, DAILY_DRAWDOWN_LIMIT, TOTAL_DRAWDOWN_LIMIT).
-
-      \  const riskDefaults: TradingSettingsDefaults = {
-
-      \    riskPerTradePercent: config.defaultRiskPerTrade,
-
-      \    maxPositions: config.maxPositions,
-
-      \    maxDailyDrawdownPercent: config.dailyDrawdownLimit,
-
-      \    maxTotalDrawdownPercent: config.totalDrawdownLimit,
-
-      \  };
-
-
-      \  const riskManager = new RiskManager({
-
-      \    settings: chooseRepo(
-
-      \      createDynamoDbTradingSettingsRepository(),
-
-      \      createInMemoryTradingSettingsRepository()
-
-      \    ),
-
-      \    state: chooseRepo(
-
-      \      createDynamoDbTradingStateRepository(),
-
-      \      createInMemoryTradingStateRepository()
-
-      \    ),
-
-      \    audit,
-
-      \    defaults: riskDefaults,
-
-      \  });
-
-
-      \  // Самообучение: датасет сделок, learning-отчёты, версии стратегий.
-
-      \  const learning = new LearningService({
-
-      \    snapshots: chooseRepo(
-
-      \      createDynamoDbTradingSnapshotRepository(),
-
-      \      createInMemoryTradingSnapshotRepository()
-
-      \    ),
-
-      \    reports: chooseRepo(
-
-      \      createDynamoDbLearningReportRepository(),
-
-      \      createInMemoryLearningReportRepository()
-
-      \    ),
-
-      \    strategies: chooseRepo(
-
-      \      createDynamoDbStrategyRepository(),
-
-      \      createInMemoryStrategyRepository()
-
-      \    ),
-
-      \    state: chooseRepo(
-
-      \      createDynamoDbStrategyStateRepository(),
-
-      \      createInMemoryStrategyStateRepository()
-
-      \    ),
-
-      \    deepseek,
-
-      \  });
-
-
-      \  const core = new TradingCore({
-
-      \    riskManager,
-
-      \    executor: new OrderExecutor(),
-
-      \    lockStore: createInMemoryLockStore(),
-
-      \    ai,
-
-      \    marketData,
-
-      \    learning,
-
-      \    audit,
-
-      \    resolveBroker: (userId) => service.getBrokerForUser(userId),
-
-      \    resolveUserIds: () => service.listUserIds(),
-
-      \    supportedSymbols: KNOWN_SYMBOLS,
-
-      \    decisionIntervalMs: config.decisionIntervalMs,
-
-      \    isGlobalPaused: () => subscriptions.isGlobalPaused(),
-
-      \    notifyAdmin: (userId, message) => {
-
-      \      defaultLogger.warn(\"уведомление админа\", { userId, message });
-
-      \    },
-
-      \    onEvent: (event) => {
-
-      \      // Все шаги торгового цикла (сбор данных и запрос AI, сигнал, hold,
-
-      \      // risk_block, trade_open/close, dup_skip, паузы, ошибки) пишутся в
-      лог,
-
-      \      // чтобы поведение цикла было видимым и диагностируемым.
-
-      \      const logger = defaultLogger.child({
-
-      \        service: \"engine\",
-
-      \        userId: event.userId,
-
-      \        requestId: event.requestId,
-
-      \      });
-
-      \      const fields: Record<string, unknown> = {
-
-      \        eventType: event.type,
-
-      \        symbol: event.symbol,
-
-      \        at: event.at,
-
-      \        data: event.data,
-
-      \      };
-
-      \      if (event.type === \"error\" || event.type === \"admin_notify\") {
-
-      \        logger.warn(`[engine] ${event.type}: ${event.message}`, fields);
-
-      \      } else {
-
-      \        logger.info(`[engine] ${event.type}: ${event.message}`, fields);
-
-      \      }
-
-      \    },
-
-      \  });
-
-
-      \  registerControlHandlers(bot, {
-
-      \    riskManager,
-
-      \    isConnected: (userId) => service.isConnected(userId),
-
-      \    resolveBroker: (userId) => service.getBrokerForUser(userId),
-
-      \  });
-
-
-      \  registerStrategyHandlers(bot, {
-
-      \    learning,
-
-      \    isAdmin: (userId) => isAdmin(config, userId),
-
-      \    audit,
-
-      \  });
-
-
-      \  bot.command(\"start\", (ctx) => ctx.reply(START_TEXT));
-
-      \  bot.command(\"help\", (ctx) =>
-
-      \    ctx.reply(
-
-      \      formatHelp(ctx.from?.id != null &&
-      subscriptions.isAdmin(ctx.from.id))
-
-      \    )
-
-      \  );
-
-
-      \  if (!config.dryRun) {
-
-      \    core.start();
-
-      \    const userIds = await service.listUserIds().catch(() => [] as
-      number[]);
-
-      \    defaultLogger
-
-      \      .child({ service: \"engine\" })
-
-      \      .info(\"торговый цикл запущен: первый анализ стартует немедленно\",
-      {
-
-      \        decisionIntervalMs: config.decisionIntervalMs,
-
-      \        users: userIds.length,
-
-      \        symbols: [...KNOWN_SYMBOLS],
-
-      \      });
-
-      \    startDailyLearningScheduler({
-
-      \      learning,
-
-      \      onError: (userId, error) => {
-
-      \        console.warn(
-
-      \          `[learning] ошибка суточного отчёта (user ${userId}): ${
-
-      \            error instanceof Error ? error.message : String(error)
-
-      \          }`
-
-      \        );
-
-      \      },
-
-      \    });
-
-      \  }
-
-
-      \  return bot;
-
+        const bot = new Telegraf(config.telegramToken);
+
+        // Структурированные логи и аудит: requestId прикрепляется к каждому
+        // входящему апдейту Telegram и пробрасывается в логи и audit_log.
+        bot.use(async (ctx, next) => {
+          attachRequestContext(ctx);
+          return next();
+        });
+
+        // Персистентность: предпочитаем DynamoDB, чтобы подключения брокера,
+        // подписки, настройки и состояние торговли переживали рестарт бота.
+        // Если БД недоступна — фолбэк на in-memory (бота можно запускать и без
+        // DynamoDB, но данные не переживают перезапуск).
+        const dbAvailable = await isDatabaseAvailable().catch(() => false);
+        defaultLogger.info("выбран источник данных для бота", {
+          storage: dbAvailable ? "dynamodb" : "in-memory",
+        });
+        const chooseRepo = <T>(dbRepo: T, memoryRepo: T): T =>
+          dbAvailable ? dbRepo : memoryRepo;
+
+        const audit = new AuditService(
+          chooseRepo(createDynamoDbAuditRepository(), createInMemoryAuditRepository())
+        );
+        const crypto = createCrypto(config.encryptionKey);
+        const repository = chooseRepo(
+          createDynamoDbBrokerRepository(),
+          createInMemoryBrokerRepository()
+        );
+        const sessions = createConnectSessionStore();
+        const service = new BrokerService({
+          crypto,
+          repository,
+          brokerType: config.brokerType,
+          brokerApiBaseUrl: config.brokerApiBaseUrl,
+          brokerApiKeyHeader: config.brokerApiKeyHeader,
+          audit,
+        });
+
+        // Подписки и админ-панель: роли admin/subscriber/guest, защита хендлеров.
+        const subscriptions = new SubscriptionService({
+          users: chooseRepo(
+            createDynamoDbUserRepository(),
+            createInMemoryUserRepository()
+          ),
+          global: chooseRepo(
+            createDynamoDbGlobalStateRepository(),
+            createInMemoryGlobalStateRepository()
+          ),
+          adminIds: config.adminTelegramIds,
+        });
+
+        // Публичные команды, доступные без активной подписки. Админ-команды
+        // проверяют ADMIN_TELEGRAM_IDS в своих хендлерах.
+        const PUBLIC_COMMANDS = new Set([
+          "start",
+          "help",
+          "cancel",
+          "admin",
+          "grant",
+          "revoke",
+          "users",
+          "broadcast",
+          "global_pause",
+        ]);
+
+        bot.use(async (ctx, next) => {
+          const userId = ctx.from?.id;
+          const { requestId, logger } = getRequestContext(ctx);
+          if (userId == null) {
+            return next();
+          }
+
+          // Админам не нужна подписка — пропускаем.
+          if (subscriptions.isAdmin(userId)) {
+            return next();
+          }
+
+          await subscriptions.touch(userId, ctx.from?.username ?? null);
+
+          const text = ctx.message && "text" in ctx.message ? ctx.message.text : "";
+          if (text.startsWith("/")) {
+            const command = text.split(/\s+/)[0]!.slice(1).toLowerCase();
+            if (PUBLIC_COMMANDS.has(command)) {
+              return next();
+            }
+          }
+
+          // Защищённый хендлер: без активной подписки доступ закрыт.
+          if (!(await subscriptions.hasActiveSubscription(userId))) {
+            logger.warn("доступ запрещён: подписка не активна", {
+              userId,
+              requestId,
+              text: text.slice(0, 120) || undefined,
+            });
+            await ctx.reply(
+              "Доступ по подписке: подписка не активна. Обратитесь к администратору."
+            );
+            return;
+          }
+
+          return next();
+        });
+
+        registerConnectHandlers(bot, { service, sessions });
+        registerAccountHandlers(bot, { service });
+        registerAdminHandlers(bot, {
+          subscriptions,
+          isAdmin: (userId) => subscriptions.isAdmin(userId),
+          audit,
+        });
+
+        // Торговое ядро и риск-контроль.
+        const deepseek = new DeepSeekClient({
+          apiKey: config.deepSeekApiKey,
+          baseUrl: config.deepSeekBaseUrl,
+          chatModel: config.deepSeekChatModel,
+          reasonerModel: config.deepSeekReasonerModel,
+        });
+        // Fallback AI-провайдер OpenRouter. Если OPENROUTER_API_KEY не задан —
+        // работает только DeepSeek, как раньше.
+        const openrouter = config.openRouterApiKey
+          ? new OpenRouterClient({
+              apiKey: config.openRouterApiKey,
+              model: config.openRouterModel,
+            })
+          : undefined;
+        const marketData = new StubMarketDataProvider();
+        const portfolio = new BrokerPortfolioProvider({
+          getBroker: (userId) => service.getBrokerForUser(userId),
+        });
+        const ai = new AiAnalysisService({
+          marketData,
+          deepseek,
+          openrouter,
+          portfolio,
+          repository: chooseRepo(
+            createDynamoDbAiDecisionRepository(),
+            createInMemoryAiDecisionRepository()
+          ),
+        });
+
+        // Дефолтные значения настроек торговли из .env (DEFAULT_RISK_PER_TRADE,
+        // MAX_POSITIONS, DAILY_DRAWDOWN_LIMIT, TOTAL_DRAWDOWN_LIMIT).
+        const riskDefaults: TradingSettingsDefaults = {
+          riskPerTradePercent: config.defaultRiskPerTrade,
+          maxPositions: config.maxPositions,
+          maxDailyDrawdownPercent: config.dailyDrawdownLimit,
+          maxTotalDrawdownPercent: config.totalDrawdownLimit,
+        };
+
+        const riskManager = new RiskManager({
+          settings: chooseRepo(
+            createDynamoDbTradingSettingsRepository(),
+            createInMemoryTradingSettingsRepository()
+          ),
+          state: chooseRepo(
+            createDynamoDbTradingStateRepository(),
+            createInMemoryTradingStateRepository()
+          ),
+          audit,
+          defaults: riskDefaults,
+        });
+
+        // Самообучение: датасет сделок, learning-отчёты, версии стратегий.
+        const learning = new LearningService({
+          snapshots: chooseRepo(
+            createDynamoDbTradingSnapshotRepository(),
+            createInMemoryTradingSnapshotRepository()
+          ),
+          reports: chooseRepo(
+            createDynamoDbLearningReportRepository(),
+            createInMemoryLearningReportRepository()
+          ),
+          strategies: chooseRepo(
+            createDynamoDbStrategyRepository(),
+            createInMemoryStrategyRepository()
+          ),
+          state: chooseRepo(
+            createDynamoDbStrategyStateRepository(),
+            createInMemoryStrategyStateRepository()
+          ),
+          deepseek,
+        });
+
+        const core = new TradingCore({
+          riskManager,
+          executor: new OrderExecutor(),
+          lockStore: createInMemoryLockStore(),
+          ai,
+          marketData,
+          learning,
+          audit,
+          resolveBroker: (userId) => service.getBrokerForUser(userId),
+          resolveUserIds: () => service.listUserIds(),
+          supportedSymbols: KNOWN_SYMBOLS,
+          decisionIntervalMs: config.decisionIntervalMs,
+          isGlobalPaused: () => subscriptions.isGlobalPaused(),
+          notifyAdmin: (userId, message) => {
+            defaultLogger.warn("уведомление админа", { userId, message });
+          },
+          onEvent: (event) => {
+            // Все шаги торгового цикла (сбор данных и запрос AI, сигнал, hold,
+            // risk_block, trade_open/close, dup_skip, паузы, ошибки) пишутся в лог,
+            // чтобы поведение цикла было видимым и диагностируемым.
+            const logger = defaultLogger.child({
+              service: "engine",
+              userId: event.userId,
+              requestId: event.requestId,
+            });
+            const fields: Record<string, unknown> = {
+              eventType: event.type,
+              symbol: event.symbol,
+              at: event.at,
+              data: event.data,
+            };
+            if (event.type === "error" || event.type === "admin_notify") {
+              logger.warn(`[engine] ${event.type}: ${event.message}`, fields);
+            } else {
+              logger.info(`[engine] ${event.type}: ${event.message}`, fields);
+            }
+          },
+        });
+
+        registerControlHandlers(bot, {
+          riskManager,
+          isConnected: (userId) => service.isConnected(userId),
+          resolveBroker: (userId) => service.getBrokerForUser(userId),
+        });
+
+        registerStrategyHandlers(bot, {
+          learning,
+          isAdmin: (userId) => isAdmin(config, userId),
+          audit,
+        });
+
+        bot.command("start", (ctx) => ctx.reply(START_TEXT));
+        bot.command("help", (ctx) =>
+          ctx.reply(
+            formatHelp(ctx.from?.id != null && subscriptions.isAdmin(ctx.from.id))
+          )
+        );
+
+        if (!config.dryRun) {
+          core.start();
+          const userIds = await service.listUserIds().catch(() => [] as number[]);
+          defaultLogger
+            .child({ service: "engine" })
+            .info("торговый цикл запущен: первый анализ стартует немедленно", {
+              decisionIntervalMs: config.decisionIntervalMs,
+              users: userIds.length,
+              symbols: [...KNOWN_SYMBOLS],
+            });
+          startDailyLearningScheduler({
+            learning,
+            onError: (userId, error) => {
+              console.warn(
+                `[learning] ошибка суточного отчёта (user ${userId}): ${
+                  error instanceof Error ? error.message : String(error)
+                }`
+              );
+            },
+          });
+        }
+
+        return bot;
       }
 
       EOF
@@ -2553,7 +1403,7 @@ tasks:
 
       # Если после рестарта логов цикла нет — смотрите блок 'нет подключённых
 
-      # пользователей' (нужно /connect в боте) и ошибки resolveUserIds."
+      # пользователей' (нужно /connect в боте) и ошибки resolveUserIds.
   - id: task-5310
     title: "Бот отправляет market-ордер на открытие позиции в Upscale и получает
       orderId, но позиция на брокере не появляется: в ..."
@@ -2595,3 +1445,235 @@ tasks:
       notional; значения логируются в fp9 и human перед отправкой. Основная
       реализация — broker/upscale.ts (openPosition, fetchActiveOrders,
       orderStatusOf, readHuman)."
+  - id: task-4133
+    title: "Вопрос по коду: от какой вероятности (уверенности) бот начинает
+      открывать сделки"
+    description: "Пользователь спрашивает: «от какой вероятности бот начнет
+      открывать сделки?» — то есть при каком пороге уверенности (confidence)
+      AI-сигнала бот решается на вход, и какие ещё условия должны выполниться.
+      Нужно изучить реализацию (ai/schema.ts, ai/prompt.ts, ai/service.ts,
+      engine/trading-core.ts, engine/risk-manager.ts, engine/settings.ts) и
+      подготовить понятный пользователю ответ: 1) есть ли жёсткий порог по
+      confidence, при котором сигнал buy/sell принимается или отбрасывается, и
+      какой он; 2) какие ещё условия должны выполниться, чтобы сделка открылась
+      (action buy/sell, side long/short, наличие entryPrice, лимиты
+      риск-менеджмента: риск на сделку, максимум позиций, лимит сделок в день,
+      просадка, whitelist символов, режим AI); 3) как режим AI (aiMode) влияет
+      на размер сделки и на готовность входить; 4) что можно изменить, чтобы бот
+      входил в сделки чаще (какие настройки через /settings или .env). Файлы
+      проекта менять нельзя — это readonly-задача. Ответ пользователю записать в
+      summary completed-задачи."
+    status: completed
+    acceptance_criteria:
+      - Задача завершена со статусом completed
+      - "В summary задачи содержится понятный пользователю ответ: есть ли порог
+        уверенности AI для открытия сделки и какой он, какие ещё условия должны
+        выполниться, как режим AI влияет на входы и что можно изменить, чтобы
+        бот входил в сделки чаще"
+    summary: "Жёсткого порога по confidence (0-100) в коде нет: signalToSide() в
+      engine/trading-core.ts открывает сделку при любом confidence, если
+      action=buy и side=long или action=sell и side=short (иначе hold/skip);
+      entryPrice необязателен (берётся цена рынка). Далее риск-менеджмент
+      (engine/risk-manager.ts) требует: не пауза и не общая/дневная просадка,
+      symbol в whitelist, tradesToday < dailyTradeLimit, позиций < maxPositions,
+      объём <= риск% баланса (aiMode: safe 0.5x, balanced 1x, aggressive 1.5x) и
+      свободная маржа. Чтобы входить чаще: /settings risk=2..5 max_positions=5
+      daily_limit=20 drawdown=10 total_drawdown=30 symbols=...
+      ai_mode=aggressive; в .env — DEFAULT_RISK_PER_TRADE, MAX_POSITIONS,
+      DAILY_DRAWDOWN_LIMIT, TOTAL_DRAWDOWN_LIMIT. Реализация: ai/schema.ts,
+      ai/prompt.ts, ai/service.ts, engine/trading-core.ts,
+      engine/risk-manager.ts, engine/settings.ts."
+  - id: task-5237
+    title: Указать, где именно в broker/upscale.ts исправить fp9 (без полного кода)
+    description:
+      "Пользователь просит не полный код, а короткий ответ: где именно в
+      broker/upscale.ts нужно исправить формат fp9. Нужно прочитать актуальную
+      реализацию broker/upscale.ts в репозитории и дать краткий, точный ответ: в
+      каких функциях и на каких строках формируются параметры market-ордера на
+      открытие позиции (amount, leverage, expectedAmount) и что конкретно там не
+      так с форматом fp9 (целое число ×10⁹ через toFp9/BigInt). Сейчас ордер
+      принимается брокером (возвращается orderId), но зависает в статусе active
+      (indexPrice:null, filledAmount:null), позиция не создаётся: в логе
+      «[upscale] market-ордер на открытие передан брокеру» видны человеческие
+      значения (amount 10.003752, leverage 1), а expectedAmountF9 содержит
+      116.00375199999999 вместо 116003751999. Ответ должен быть коротким: имя
+      функции/метода, номер строки и суть правки (какое значение в какое поле и
+      в каком формате должно уходить), без выдачи полного текста файла. Файлы
+      проекта менять нельзя — это readonly-задача. Ответ пользователю записать в
+      summary completed-задачи."
+    status: completed
+    acceptance_criteria:
+      - Задача завершена со статусом completed
+      - "В summary задачи содержится короткий ответ: в каких функциях и на каких
+        строках broker/upscale.ts формируются amount/leverage/expectedAmount и
+        что именно нужно исправить для корректного fp9, без полного текста
+        файла"
+    summary: |-
+      Формирование amount/leverage/expectedAmount — метод openPosition()
+      (broker/upscale.ts, строки 583–587), отправка брокеру — createOrder()
+      (строки 605–613, поля amount/leverage/expectedAmount в POST /orders);
+      конвертер в fp9 — toFp9() (строка 235). Причина: toFp9() делает
+      BigInt(Math.round(value * 1e9)) в double, и из-за накопленной ошибки
+      float для 116.00375199999999 выдаёт «116003752000», а брокер
+      (и пользователь) ждут точное целое «116003751999» (×10^9 по первым
+      9 знакам), поэтому ордер остаётся в active и позиция не создаётся.
+      Правка: в toFp9() убрать double-умножение/округление — брать целое
+      ×10^9 через усечение до 9 знаков (например BigInt(Math.trunc(value*1e9))
+      либо строковое разложение на int+первые 9 дробных цифр); формат всех
+      трёх полей не меняется — в amount уходит amount=notional/leverage,
+      в leverage — leverage, в expectedAmount — notional, но как целые
+      строки ×10^9.
+  - id: task-1683
+    title: Выдать готовые команды для исправления fp9 в broker/upscale.ts (sed/perl)
+    description: "Пользователь работает по SSH на сервере (root@89.208.107.164,
+      проект ~/aibot) и просит не полный код, а готовые команды, которые можно
+      вставить в терминал для исправления формата fp9 в broker/upscale.ts. Нужно
+      прочитать актуальную реализацию broker/upscale.ts в репозитории и выдать
+      короткий набор готовых команд (sed/perl или python-скрипт одной строкой)
+      для: 1) исправления toFp9(), чтобы конвертация в fp9 давала точное целое
+      ×10⁹ через усечение до 9 знаков, а не BigInt(Math.round(value*1e9)) с
+      double-ошибкой (сейчас 116.00375199999999 превращается в 116003752000
+      вместо 116003751999); 2) гарантии, что поля amount, leverage,
+      expectedAmount market-ордера на открытие отправляются брокеру Upscale в
+      формате fp9 (целые строки ×10⁹), а не человеческими числами (в логах
+      amount 10.003752, leverage 1, expectedAmountF9 116.00375199999999).
+      Команды должны быть готовы к копированию в терминал сервера из папки
+      ~/aibot, включая перезапуск бота (docker compose restart bot) и проверку
+      логов (строка «[upscale] market-ордер на открытие передан брокеру» со
+      значениями в fp9 и статусом executed). Файлы проекта менять нельзя — это
+      readonly-задача: только выдать команды в summary. В summary записать
+      точный список команд построчно."
+    status: completed
+    acceptance_criteria:
+      - Задача завершена со статусом completed
+      - В summary задачи содержится готовый к копированию список команд для
+        исправления fp9 в broker/upscale.ts на сервере (sed/perl/python),
+        включая перезапуск бота и проверку логов
+    summary: "Readonly-задача: прочитана актуальная реализация broker/upscale.ts
+      (toFp9 на строке 239 использует BigInt(Math.round(value*FP9)), что даёт
+      116003752000 вместо 116003751999). Готовые команды для терминала сервера
+      (из папки ~/aibot), построчно: 1) perl -pi -e
+      's/BigInt\\(Math\\.round\\(value \\*
+      FP9\\)\\)\\.toString\\(\\)/BigInt(Math.trunc(value * FP9)).toString()/g'
+      broker/upscale.ts 2) grep -n \"Math.trunc\" broker/upscale.ts 3) docker
+      compose restart bot 4) docker compose logs --tail=200 bot | grep
+      \"\\[upscale\\] market-ордер на открытие передан брокеру\" В логах искать
+      amount/leverage/expectedAmount как целые строки ×10^9 и status:
+      \"executed\". Правка конвертации toFp9 (Math.round -> Math.trunc) даёт
+      точное целое ×10^9 через усечение; поля amount=amountFp9,
+      leverage=leverageFp9, expectedAmount=expectedAmountFp9 в createOrder уже
+      передаются как целые fp9-строки, менять их не нужно. typecheck/lint/build
+      проходят."
+  - id: task-8397
+    title:
+      "Пересобрать интеграцию Upscale: market-ордер зависает в active, позиции
+      не открываются"
+    description: "Пересобрать интеграцию с реальным брокером Upscale, чтобы бот
+      реально открывал позиции и работал. Сейчас market-ордер принимается
+      брокером (возвращается orderId), но зависает в статусе active
+      (indexPrice:null, filledAmount:null), позиция не создаётся. По официальной
+      документации Upscale: обязательные поля POST /orders — accountId,
+      marketId, type, direction, amount (quote-резерв в fp9); expectedAmount —
+      это базовый размер актива для проверки проскальзывания, а '0' отключает
+      проверку (в офиц. примере для market-ордера передаётся expectedAmount:
+      '0'); для market-ордера price не передаётся. Сейчас бот шлёт
+      expectedAmount: notional (100001855999 — quote-сумма в USDT) вместо
+      '0'/базового размера, из-за чего движок трактует его как размер в базовом
+      активе и ордер может зависнуть в active. Плюс цена для расчёта объёма
+      берётся из заглушечного провайдера (StubMarketDataProvider: SOL 178.32
+      вместо реальной ~100 USDT) — нужна реальная цена с брокера (GET
+      /v2/markets?accountId=... state.indexPrice), чтобы notional, quantity были
+      от реальной цены. Нужно исправить формирование market-ордера на открытие в
+      broker/upscale.ts: expectedAmount = '0' (или базовый размер) вместо
+      notional, не передавать price для market, брать реальную цену рынка с
+      брокера; сохранить существующую диагностику (полный ответ POST /orders,
+      GET активных ордеров, ожидание позиции, PositionNotOpenedError при статусе
+      ≠ executed). Цель: бот реально открывает позиции на Upscale (status
+      executed, позиция подтверждена, trade_open в логах)."
+    status: completed
+    acceptance_criteria:
+      - Market-ордер на открытие позиции в Upscale реально исполняется (статус
+        executed), а не зависает в active
+      - "В запросе POST /orders для market-ордера на открытие уходят только
+        нужные поля: accountId, marketId, type: market, direction, amount
+        (quote-резерв), leverage; expectedAmount не передаётся or передаётся как
+        '0' (без проверки проскальзывания) либо как размер в базовом активе, а
+        НЕ как notional в котируемой валюте"
+      - Цена для расчёта объёма берётся реальная с брокера (GET
+        /v2/markets?accountId=... state.indexPrice), а не фейковая из заглушки
+        StubMarketDataProvider (сейчас в логах цена SOL 178.32, хотя реальная
+        ~100)
+      - Позиция появляется в активных позициях брокера, бот подтверждает
+        открытие (позиция подтверждена, [engine] trade_open в логах)
+      - После пересборки и перезапуска бот открывает позиции на реальном брокере
+        без ручных правок на сервере
+    summary:
+      "Исправлено формирование market-ордера на открытие в broker/upscale.ts
+      (метод openPosition): expectedAmount теперь '0' (без проверки
+      проскальзывания) вместо notional в котируемой валюте, из-за которого ордер
+      зависал в active (indexPrice:null, filledAmount:null) и позиция не
+      создавалась; для market-ордера price не передаётся, а цена для расчёта
+      notional/amount берётся реальная с брокера (state.indexPrice из GET
+      /v2/markets?accountId=...), а не из order.price, посчитанного по
+      заглушечным данным StubMarketDataProvider. Существующая диагностика
+      (полный ответ POST /orders, GET активных ордеров, ожидание позиции,
+      PositionNotOpenedError при статусе ≠ executed) сохранена. typecheck, lint,
+      build проходят."
+  - id: task-6612
+    title: "Защитные ордера на бирже: стоп-лосс (риск%) и тейк-профит (RR) при
+      открытии позиции, макс. плечо, среднее время удержания в AI-контексте"
+    description:
+      'При открытии позиции на брокере Upscale бот должен размещать на
+      бирже защитные ордера (стоп-лосс и тейк-профит), которые висят на бирже и
+      не зависят от работы бота. По документации Upscale стоп-лосс и тейк-профит
+      отправляются вместе с ордером на открытие через поля stopTriggerPrice и
+      takeTriggerPrice в POST /orders («Стоп-лосс и тейк-профит могут идти
+      вместе с ордером на открытие»). Пользователь задаёт через /settings риск
+      как размер стопа в процентах от цены входа (например риск 1% = стоп 1%),
+      этот процент превращается в стоп-лосс на бирже; также нужен тейк-профит,
+      который срабатывает при заданном соотношении риска к прибыли (RR),
+      настраиваемом в /settings. При открытии market-ордера (POST /orders с
+      type: market, amount в fp9, expectedAmount "0", leverage в fp9) в том же
+      запросе должны уходить stopTriggerPrice и takeTriggerPrice в формате fp9,
+      рассчитанные от цены входа/рыночной цены: для long стоп ниже цены входа,
+      тейк выше; для short наоборот. Требования: размер стопа задаётся в
+      настройке риска; стоп-лосс открывается ордером у брокера; позиция может
+      быть открыта со стопом меньше заданного, но не больше; сделки открываются
+      с максимальным плечом, разрешённым рынком/фазой, а маржа корректируется
+      (риск-менеджмент подгоняет размер позиции под стоп). В ответе должны быть
+      видны статусы стоп/тейк ордеров, а в логах — что защитные ордера размещены
+      на бирже и висят (active). Сохранить существующую диагностику: полный
+      ответ POST /orders, GET активных ордеров, ожидание позиции,
+      PositionNotOpenedError при статусе ≠ executed. Также добавить в
+      AI-контекст и использовать среднее время удержания сделки, чтобы AI
+      ориентировался на него при принятии решений.'
+    status: completed
+    acceptance_criteria:
+      - Пользователь задаёт риск (стоп-лосс) в процентах от цены входа через
+        /settings (например стоп-лосс 1%)
+      - Пользователь задаёт целевое соотношение риска к прибыли (RR) для
+        тейк-профита через /settings
+      - При открытии позиции бот отправляет POST /orders с stopTriggerPrice
+        (стоп-лосс) и takeTriggerPrice (тейк-профит), рассчитанными от цены
+        входа и настроек
+      - Стоп-лосс по позиции не больше заданного процента; позиция может быть
+        открыта со стопом меньше заданного, но не больше
+      - Сделки открываются с максимальным плечом, разрешённым рынком/фазой;
+        маржа корректируется для соответствия риску
+      - После открытия позиции на бирже висят защитные ордера (active),
+        независимые от работы бота; срабатывание стопа/тейка логируется и видно
+        в логах, включая статусы защитных ордеров
+    summary: >-
+      Реализованы защитные ордера при открытии позиции на Upscale. В настройки
+      (/settings) добавлены stop_loss=% (стоп от цены входа, отдельно от risk
+      на сделку) и rr=% (соотношение риска к прибыли для тейка); при открытии
+      market-ордера broker/upscale.ts отправляет stopTriggerPrice и
+      takeTriggerPrice в fp9 вместе с POST /orders (пересчёт процентов от
+      реального indexPrice брокера, чтобы стоп не превышал заданный риск);
+      плечо берётся максимально допустимое рынком, размер позиции подгоняется
+      риск-менеджментом под стоп (notional = рискБюджет / стоп%). Статусы
+      защитных ордеров (active) логируются после открытия и по ходу цикла
+      (engine/trading-core.ts, редко, с дедупликацией), добавлена диагностика
+      закрытия позиции защитным ордером на бирже. В AI-контекст переданы RR,
+      стоп-лосс и среднее время удержания сделки (ai/portfolio.ts, ai/prompt.ts).
+      typecheck, lint, build проходят.

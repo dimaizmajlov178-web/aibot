@@ -5,6 +5,7 @@ export const brokerModule: BotModule = { name: "broker" };
 export { BaseBroker, BrokerConnectionError } from "./base";
 export type {
   BrokerAccount,
+  BrokerOpenOrder,
   BrokerStats,
   ClosedTrade,
   OpenPosition,

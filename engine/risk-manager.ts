@@ -108,6 +108,8 @@ export class RiskManager {
     const next = applySettingsPatch(current, patch);
     const parsed = tradingSettingsSchema.safeParse({
       riskPerTradePercent: next.riskPerTradePercent,
+      stopLossPercent: next.stopLossPercent,
+      riskRewardRatio: next.riskRewardRatio,
       maxPositions: next.maxPositions,
       dailyTradeLimit: next.dailyTradeLimit,
       maxDailyDrawdownPercent: next.maxDailyDrawdownPercent,
@@ -123,6 +125,8 @@ export class RiskManager {
     const settings: TradingSettings = {
       ...next,
       riskPerTradePercent: parsed.data.riskPerTradePercent,
+      stopLossPercent: parsed.data.stopLossPercent,
+      riskRewardRatio: parsed.data.riskRewardRatio,
       maxPositions: parsed.data.maxPositions,
       dailyTradeLimit: parsed.data.dailyTradeLimit,
       maxDailyDrawdownPercent: parsed.data.maxDailyDrawdownPercent,
@@ -143,6 +147,16 @@ export class RiskManager {
           key: "riskPerTradePercent",
           before: current.riskPerTradePercent,
           after: settings.riskPerTradePercent,
+        },
+        {
+          key: "stopLossPercent",
+          before: current.stopLossPercent,
+          after: settings.stopLossPercent,
+        },
+        {
+          key: "riskRewardRatio",
+          before: current.riskRewardRatio,
+          after: settings.riskRewardRatio,
         },
         {
           key: "maxPositions",
@@ -357,18 +371,23 @@ export class RiskManager {
       );
     }
 
-    // 7. % баланса на сделку (с учётом режима AI).
+    // 7. % баланса на сделку (с учётом режима AI): риск реализуется через
+    // стоп-лосс, поэтому позиция ограничивается сверху не номиналом, а
+    // размером, при котором срабатывание стопа теряет не больше риска на
+    // сделку: notional_limit = рискБюджет / (стоп% / 100).
     const effectiveRiskPercent = Math.min(
       resolvedSettings.riskPerTradePercent *
         aiModeMultiplier(resolvedSettings.aiMode),
       resolvedSettings.riskPerTradePercent
     );
+    const riskBudget = (snapshot.account.balance * effectiveRiskPercent) / 100;
+    const stopFraction = resolvedSettings.stopLossPercent / 100;
     const maxTradeNotional =
-      (snapshot.account.balance * effectiveRiskPercent) / 100;
+      stopFraction > 0 ? riskBudget / stopFraction : riskBudget;
     if (orderNotional > maxTradeNotional) {
       return this.blocked(
         "risk_per_trade_exceeded",
-        `Объём ${orderNotional.toFixed(2)} превышает риск на сделку ${maxTradeNotional.toFixed(2)}`
+        `Объём ${orderNotional.toFixed(2)} превышает риск на сделку (стоп ${resolvedSettings.stopLossPercent}%): не более ${maxTradeNotional.toFixed(2)}`
       );
     }
 

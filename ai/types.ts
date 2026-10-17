@@ -66,5 +66,15 @@ export interface PortfolioContext {
   totalPnl: number;
   positions: PositionContext[];
   riskPerTradePercent: number;
+  /** Стоп-лосс в процентах от цены входа (например 1 -> стоп 1%). */
+  stopLossPercent: number;
+  /** Целевое соотношение риска к прибыли (RR) для тейк-профита. */
+  riskRewardRatio: number;
   maxPositions: number;
+  /**
+   * Средняя продолжительность сделки в часах (по закрытым сделкам). Может
+   * быть null, если данных недостаточно. AI использует это значение, чтобы
+   * ориентироваться на типичное время удержания позиции.
+   */
+  avgHoldingTimeHours: number | null;
 }

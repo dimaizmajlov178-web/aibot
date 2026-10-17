@@ -6,6 +6,7 @@ export {
   TradingCore,
   DEFAULT_DECISION_INTERVAL_MS,
   DEFAULT_LOCK_TTL_MS,
+  PROTECTIVE_STATUS_CHECK_INTERVAL_MS,
 } from "./trading-core";
 export type {
   TradingCoreDeps,
@@ -37,6 +38,9 @@ export {
   applySettingsPatch,
   parseSettingsPayload,
   tradingSettingsSchema,
+  DEFAULT_RISK_PER_TRADE_PERCENT,
+  DEFAULT_STOP_LOSS_PERCENT,
+  DEFAULT_RISK_REWARD_RATIO,
 } from "./settings";
 export type { TradingSettingsInput, TradingSettingsDefaults } from "./settings";
 export type {

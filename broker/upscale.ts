@@ -4,6 +4,7 @@ import {
   BaseBroker,
   BrokerConnectionError,
   type BrokerAccount,
+  type BrokerOpenOrder,
   type BrokerStats,
   type ClosedTrade,
   type OpenPosition,
@@ -566,25 +567,50 @@ export class UpscaleBroker extends BaseBroker {
     order: OrderRequest
   ): Promise<OrderReceipt> {
     const direction: PositionSide = order.side;
+    // Для market-ордера цена берётся с брокера (реальная indexPrice из
+    // GET /v2/markets?accountId=...), а не из order.price, который движок
+    // считает по заглушечным данным StubMarketDataProvider (SOL 178.32
+    // вместо реальной ~100 USDT). Заглушечная цена искажает notional/amount.
     const price =
-      order.price && order.price > 0
-        ? order.price
-        : fromFp9(readString(asRecord(market.state), "indexPrice"));
+      fromFp9(readString(asRecord(market.state), "indexPrice")) ||
+      (order.price && order.price > 0 ? order.price : 0);
     if (!(price > 0)) {
       throw new BrokerConnectionError(
         `Нет цены для открытия ${order.symbol}: укажите price или дождитесь indexPrice`
       );
     }
     const leverage = this.resolveLeverage(market);
+    // Стоп-лосс и тейк-профит отправляются вместе с ордером на открытие
+    // (поля stopTriggerPrice / takeTriggerPrice в POST /orders). Цены —
+    // абсолютные, в формате fp9: для long стоп ниже цены входа, тейк выше;
+    // для short наоборот. Защитные ордера висят на бирже независимо от бота.
+    // Проценты стопа/тейка пересчитываются относительно реальной цены рынка
+    // (indexPrice), чтобы при расхождении цены движка и брокера стоп не
+    // вышел за заданный процент риска.
+    const { stopTriggerPrice, takeTriggerPrice } = this.resolveTriggerPrices(
+      order,
+      price
+    );
+    const stopTriggerPriceFp9 =
+      stopTriggerPrice !== null ? toFp9(stopTriggerPrice) : null;
+    const takeTriggerPriceFp9 =
+      takeTriggerPrice !== null ? toFp9(takeTriggerPrice) : null;
     const notional = order.quantity * price;
     if (!(notional > 0)) {
       throw new BrokerConnectionError("Некорректный объём ордера");
     }
     // amount для market-ордера на открытие — quote-сумма резерва (маржа).
+    // Маржа считается от полного notional при максимальном плече, т.е.
+    // риск-менеджмент отдельно подгоняет размер позиции под стоп.
     const amount = notional / leverage;
     const amountFp9 = toFp9(amount);
     const leverageFp9 = toFp9(leverage);
-    const expectedAmountFp9 = toFp9(notional);
+    // expectedAmount — базовый размер актива для проверки проскальзывания.
+    // '0' отключает проверку (офиц. пример для market-ордера). Не передаём
+    // notional (quote-сумму в котируемой валюте): движок брокера трактует
+    // его как размер в базовом активе, из-за чего ордер зависал в active
+    // (indexPrice:null, filledAmount:null) и позиция не создавалась.
+    const expectedAmountFp9 = "0";
 
     defaultLogger
       .child({ service: "broker" })
@@ -600,6 +626,8 @@ export class UpscaleBroker extends BaseBroker {
         amountFp9,
         leverageFp9,
         expectedAmountFp9,
+        stopTriggerPriceFp9,
+        takeTriggerPriceFp9,
       });
 
     const response = await this.createOrder({
@@ -610,6 +638,8 @@ export class UpscaleBroker extends BaseBroker {
       amount: amountFp9,
       leverage: leverageFp9,
       expectedAmount: expectedAmountFp9,
+      ...(stopTriggerPriceFp9 ? { stopTriggerPrice: stopTriggerPriceFp9 } : {}),
+      ...(takeTriggerPriceFp9 ? { takeTriggerPrice: takeTriggerPriceFp9 } : {}),
     });
 
     const orderStatus = this.orderStatusOf(response);
@@ -638,6 +668,8 @@ export class UpscaleBroker extends BaseBroker {
         amount,
         leverage,
         price,
+        stopTriggerPrice,
+        takeTriggerPrice,
         response: responseInfo,
       });
 
@@ -719,6 +751,36 @@ export class UpscaleBroker extends BaseBroker {
     const executedPrice = this.positionEntryPrice(position, market);
     const quantity = fromFp9(position.size);
 
+    // После подтверждения позиции смотрим висящие на бирже ордера:
+    // статусы защитных стоп/тейк должны быть active — они не зависят от
+    // работы бота. Список также уходит в чек движка (trade_open).
+    const protectiveOrders = await this.collectProtectiveOrders(
+      accountId,
+      marketId
+    );
+    if (protectiveOrders.length > 0) {
+      defaultLogger
+        .child({ service: "broker" })
+        .info(`[upscale] защитные ордера размещены на бирже (active)`, {
+          symbol: order.symbol,
+          side: direction,
+          marketId,
+          orderId: String(response.id ?? "?"),
+          protectiveOrders,
+        });
+    } else {
+      defaultLogger
+        .child({ service: "broker" })
+        .warn(`[upscale] защитные стоп/тейк ордера не найдены в активных`, {
+          symbol: order.symbol,
+          side: direction,
+          marketId,
+          orderId: String(response.id ?? "?"),
+          stopTriggerPrice,
+          takeTriggerPrice,
+        });
+    }
+
     return {
       orderId: String(response.id ?? `upscale-${Date.now()}`),
       symbol: order.symbol,
@@ -728,6 +790,7 @@ export class UpscaleBroker extends BaseBroker {
       executedPrice,
       status: "filled",
       executedAt: toIso(response.createdAt),
+      protectiveOrders,
     };
   }
 
@@ -1112,14 +1175,54 @@ export class UpscaleBroker extends BaseBroker {
     const settings = asRecord(market.settings);
     const min = fromFp9(readString(settings, "minLeverage"));
     const max = fromFp9(readString(settings, "maxLeverage"));
-    let leverage = 1;
+    // Сделки открываются с МАКСИМАЛЬНЫМ плечом, разрешённым рынком/фазой:
+    // маржа (amount = notional / leverage) при этом минимальна, а
+    // риск-менеджмент отдельно подгоняет размер позиции под стоп.
+    let leverage = max > 0 ? max : 1;
     if (min > 0 && leverage < min) {
       leverage = min;
     }
-    if (max > 0 && leverage > max) {
-      leverage = max;
-    }
     return leverage;
+  }
+
+  /**
+   * Пересчитывает абсолютные стоп/тейк цены из ордера под реальную цену
+   * исполнения (fillPrice — indexPrice с брокера). Движок считает цены от
+   * своей рыночной цены (заглушечные данные могут отличаться от реальной
+   * цены брокера), поэтому абсолютные стоп/тейк пересчитываются как те же
+   * проценты расстояния от цены входа, но относительно реальной fillPrice.
+   * Это гарантирует, что стоп по позиции не больше заданного процента:
+   * для long — ниже цены входа, для short — выше (и наоборот для тейка).
+   */
+  private resolveTriggerPrices(
+    order: OrderRequest,
+    fillPrice: number
+  ): {
+    stopTriggerPrice: number | null;
+    takeTriggerPrice: number | null;
+  } {
+    // Цена, от которой движок считал проценты стопа/тейка.
+    const referencePrice =
+      order.price && order.price > 0 ? order.price : fillPrice;
+    let stopTriggerPrice: number | null = null;
+    let takeTriggerPrice: number | null = null;
+    if (order.stopTriggerPrice && order.stopTriggerPrice > 0) {
+      const stopDistancePct =
+        Math.abs(order.stopTriggerPrice - referencePrice) / referencePrice;
+      stopTriggerPrice =
+        order.side === "long"
+          ? fillPrice * (1 - stopDistancePct)
+          : fillPrice * (1 + stopDistancePct);
+    }
+    if (order.takeTriggerPrice && order.takeTriggerPrice > 0) {
+      const takeDistancePct =
+        Math.abs(order.takeTriggerPrice - referencePrice) / referencePrice;
+      takeTriggerPrice =
+        order.side === "long"
+          ? fillPrice * (1 + takeDistancePct)
+          : fillPrice * (1 - takeDistancePct);
+    }
+    return { stopTriggerPrice, takeTriggerPrice };
   }
 
   private accountIdOf(account: UpscaleAccount): string {
@@ -1250,6 +1353,88 @@ export class UpscaleBroker extends BaseBroker {
         createdAt: raw.createdAt as string | number | undefined,
       } satisfies UpscaleActiveOrder;
     });
+  }
+
+  /**
+   * Висящие на бирже защитные стоп/тейк ордера после открытия позиции.
+   * Фильтрует активные ордера счёта по рынку и типу (stop/take). Статус
+   * active означает, что ордер размещён на бирже и не зависит от бота.
+   */
+  private async collectProtectiveOrders(
+    accountId: string,
+    marketId?: string
+  ): Promise<BrokerOpenOrder[]> {
+    try {
+      const orders = await this.fetchActiveOrders(accountId);
+      return orders
+        .filter((order) => {
+          if (order.status?.toLowerCase() !== "active") {
+            return false;
+          }
+          const type = String(order.type ?? "").toLowerCase();
+          if (!(type.includes("stop") || type.includes("take"))) {
+            return false;
+          }
+          if (marketId) {
+            const marketRef = String(order.marketId ?? order.market ?? "");
+            if (
+              marketRef !== "" &&
+              normalizeSymbol(marketRef) !== normalizeSymbol(marketId)
+            ) {
+              return false;
+            }
+          }
+          return true;
+        })
+        .map((order): BrokerOpenOrder => {
+          const marketRef = String(order.marketId ?? order.market ?? "");
+          return {
+            id: String(order.id ?? order.orderId ?? "?"),
+            symbol: marketRef,
+            type: order.type ?? "?",
+            status: order.status ?? "active",
+            side: this.normalizeDirection(order.direction),
+            triggerPrice: order.price ?? undefined,
+            price: order.price ?? undefined,
+            amount: order.amount ?? undefined,
+            filledAmount: order.filledAmount ?? undefined,
+            leverage: order.leverage ?? undefined,
+            errorCode: order.errorCode ?? null,
+            createdAt: order.createdAt ? toIso(order.createdAt) : undefined,
+          };
+        });
+    } catch (error) {
+      defaultLogger
+        .child({ service: "broker" })
+        .warn(`[upscale] не удалось получить статусы защитных ордеров`, {
+          accountId,
+          marketId: marketId ?? null,
+          error: errorMessage(error),
+        });
+      return [];
+    }
+  }
+
+  async getOpenOrders(): Promise<BrokerOpenOrder[]> {
+    const account = await this.resolveAccount();
+    const accountId = this.accountIdOf(account);
+    const orders = await this.fetchActiveOrders(accountId);
+    return orders.map(
+      (order): BrokerOpenOrder => ({
+        id: String(order.id ?? order.orderId ?? "?"),
+        symbol: String(order.marketId ?? order.market ?? ""),
+        type: order.type ?? "?",
+        status: order.status ?? "?",
+        side: this.normalizeDirection(order.direction),
+        triggerPrice: order.price ?? undefined,
+        price: order.price ?? undefined,
+        amount: order.amount ?? undefined,
+        filledAmount: order.filledAmount ?? undefined,
+        leverage: order.leverage ?? undefined,
+        errorCode: order.errorCode ?? null,
+        createdAt: order.createdAt ? toIso(order.createdAt) : undefined,
+      })
+    );
   }
 
   private async fetchMarkets(accountId: string): Promise<UpscaleMarket[]> {

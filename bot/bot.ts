@@ -184,24 +184,13 @@ export async function createBot(config: BotConfig): Promise<Telegraf> {
       })
     : undefined;
   const marketData = new StubMarketDataProvider();
-  const portfolio = new BrokerPortfolioProvider({
-    getBroker: (userId) => service.getBrokerForUser(userId),
-  });
-  const ai = new AiAnalysisService({
-    marketData,
-    deepseek,
-    openrouter,
-    portfolio,
-    repository: chooseRepo(
-      createDynamoDbAiDecisionRepository(),
-      createInMemoryAiDecisionRepository()
-    ),
-  });
 
   // Дефолтные значения настроек торговли из .env (DEFAULT_RISK_PER_TRADE,
   // MAX_POSITIONS, DAILY_DRAWDOWN_LIMIT, TOTAL_DRAWDOWN_LIMIT).
   const riskDefaults: TradingSettingsDefaults = {
     riskPerTradePercent: config.defaultRiskPerTrade,
+    stopLossPercent: config.defaultRiskPerTrade,
+    riskRewardRatio: 2,
     maxPositions: config.maxPositions,
     maxDailyDrawdownPercent: config.dailyDrawdownLimit,
     maxTotalDrawdownPercent: config.totalDrawdownLimit,
@@ -218,6 +207,30 @@ export async function createBot(config: BotConfig): Promise<Telegraf> {
     ),
     audit,
     defaults: riskDefaults,
+  });
+
+  // Портфель для AI-контекста: настройки риска (стоп-лосс % и RR) и среднее
+  // время удержания сделок берутся из реальных настроек и истории брокера.
+  const portfolio = new BrokerPortfolioProvider({
+    getBroker: (userId) => service.getBrokerForUser(userId),
+    getSettings: async (userId) => {
+      const settings = await riskManager.getSettings(userId);
+      return {
+        stopLossPercent: settings.stopLossPercent,
+        riskRewardRatio: settings.riskRewardRatio,
+        maxPositions: settings.maxPositions,
+      };
+    },
+  });
+  const ai = new AiAnalysisService({
+    marketData,
+    deepseek,
+    openrouter,
+    portfolio,
+    repository: chooseRepo(
+      createDynamoDbAiDecisionRepository(),
+      createInMemoryAiDecisionRepository()
+    ),
   });
 
   // Самообучение: датасет сделок, learning-отчёты, версии стратегий.

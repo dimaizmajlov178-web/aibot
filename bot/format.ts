@@ -146,6 +146,8 @@ export function formatSettings(settings: TradingSettings): string {
   return [
     "Настройки торговли",
     `Риск на сделку: ${money(settings.riskPerTradePercent)}%`,
+    `Стоп-лосс: ${money(settings.stopLossPercent)}% от цены входа`,
+    `Тейк-профит (RR): ${money(settings.riskRewardRatio)}`,
     `Максимум позиций: ${settings.maxPositions}`,
     `Лимит сделок в день: ${settings.dailyTradeLimit}`,
     `Дневная просадка (лимит): ${money(settings.maxDailyDrawdownPercent)}%`,
@@ -153,7 +155,7 @@ export function formatSettings(settings: TradingSettings): string {
     `Символы: ${symbols}`,
     `Режим AI: ${settings.aiMode}`,
     "",
-    "Изменить: /settings risk=1 max_positions=5 symbols=BTC/USDT,ETH/USDT ai_mode=aggressive",
+    "Изменить: /settings risk=1 stop_loss=1 rr=2 max_positions=5 symbols=BTC/USDT,ETH/USDT ai_mode=aggressive",
   ].join("\n");
 }
 

@@ -53,6 +53,36 @@ export interface OrderRequest {
   action: OrderAction;
   quantity: number;
   price?: number;
+  /**
+   * Стоп-лосс в абсолютной цене (для long — ниже цены входа, для short —
+   * выше). Отправляется брокеру вместе с ордером на открытие как
+   * stopTriggerPrice, чтобы защитный ордер висел на бирже независимо от
+   * работы бота.
+   */
+  stopTriggerPrice?: number;
+  /**
+   * Тейк-профит в абсолютной цене (для long — выше цены входа, для short —
+   * ниже). Отправляется брокеру как takeTriggerPrice в том же POST /orders.
+   */
+  takeTriggerPrice?: number;
+}
+
+/** Открытый (висящий на бирже) ордер брокера — в т.ч. защитные стоп/тейк. */
+export interface BrokerOpenOrder {
+  id: string;
+  symbol: string;
+  /** Тип ордера: market / stop / take / limit и т.п. */
+  type: string;
+  /** Статус на бирже: active / executed / canceled / rejected. */
+  status: string;
+  side?: PositionSide;
+  triggerPrice?: number;
+  price?: number;
+  amount?: number;
+  filledAmount?: number;
+  leverage?: number;
+  errorCode?: string | null;
+  createdAt?: string;
 }
 
 export interface OrderReceipt {
@@ -64,6 +94,12 @@ export interface OrderReceipt {
   executedPrice: number;
   status: "filled";
   executedAt: string;
+  /**
+   * Открытые защитные ордера (стоп-лосс / тейк-профит), размещённые на бирже
+   * вместе с ордером на открытие. Пустой массив — защитные ордера не
+   * размещались (закрытие позиции) или брокер их не возвращает.
+   */
+  protectiveOrders?: BrokerOpenOrder[];
 }
 
 export abstract class BaseBroker {
@@ -89,6 +125,16 @@ export abstract class BaseBroker {
    * код обрабатывает ошибку и делает ретрай.
    */
   abstract executeOrder(order: OrderRequest): Promise<OrderReceipt>;
+
+  /**
+   * Активные (висящие на бирже) ордера счёта, включая защитные стоп/тейк.
+   * Используется для диагностики: статусы защитных ордеров, зависимость от
+   * работы бота отсутствует. По умолчанию возвращает пустой список — брокеры,
+   * не поддерживающие запрос открытых ордеров, могут оставить реализацию.
+   */
+  async getOpenOrders(): Promise<BrokerOpenOrder[]> {
+    return [];
+  }
 }
 
 export class BrokerConnectionError extends Error {

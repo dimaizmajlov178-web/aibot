@@ -1,4 +1,4 @@
-import type { BaseBroker, PositionSide } from "../broker/base";
+import type { BaseBroker, BrokerOpenOrder, PositionSide } from "../broker/base";
 import { UpscaleApiError } from "../broker";
 import type { AnalyzeResult, AiAnalysisService } from "../ai/service";
 import type { TradeSignal } from "../ai/schema";
@@ -19,6 +19,12 @@ export const DEFAULT_DECISION_INTERVAL_MS = 300_000;
 export const DEFAULT_LOCK_TTL_MS = 30_000;
 /** Пауза перед следующей итерацией после ошибки rate limit брокера (429). */
 export const RATE_LIMIT_BACKOFF_MS = 5_000;
+/**
+ * Минимальный интервал между проверками статусов защитных ордеров (мс).
+ * Защита от лишних запросов GET /orders: статусы висящих стоп/тейк-ордеров
+ * проверяются не чаще раза в этот интервал на каждый символ.
+ */
+export const PROTECTIVE_STATUS_CHECK_INTERVAL_MS = 120_000;
 
 export type EngineEventType =
   | "signal"
@@ -85,6 +91,20 @@ export class TradingCore {
   private readonly supportedSymbols: readonly string[];
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  /**
+   * Последний зафиксированный статус защитных ордеров по ключу
+   * "userId:symbol" — чтобы статусы висящих стоп/тейк ордеров писались в лог
+   * при изменении, а не на каждом тике цикла.
+   */
+  private readonly protectiveStatusCache = new Map<string, string>();
+  /** Ключи "userId:symbol", для которых мы видели открытую позицию. */
+  private readonly seenPositionKeys = new Set<string>();
+  /**
+   * Время последней проверки защитных ордеров по ключу "userId:symbol".
+   * Статусы проверяются не чаще PROTECTIVE_STATUS_CHECK_INTERVAL_MS, чтобы
+   * лишние GET /orders не упирались в rate limit брокера.
+   */
+  private readonly protectiveStatusCheckedAt = new Map<string, number>();
 
   constructor(private readonly deps: TradingCoreDeps) {
     this.decisionIntervalMs =
@@ -428,6 +448,28 @@ export class TradingCore {
       (position) => position.symbol.toUpperCase() === normSymbol
     );
 
+    // Если ранее позиция была открыта, а сейчас её нет (до того, как AI
+    // успел дать сигнал на закрытие) — она закрылась на бирже, скорее всего
+    // защитным ордером (стоп-лосс или тейк-профит). Фиксируем в логах.
+    if (!existing) {
+      const positionKey = `${userId}:${normSymbol}`;
+      if (this.seenPositionKeys.has(positionKey)) {
+        this.emit(
+          event(
+            "diagnostic",
+            userId,
+            normSymbol,
+            "Позиция закрыта на бирже (вероятно, сработал защитный стоп/тейк ордер)",
+            { source, requestId },
+            requestId
+          )
+        );
+        this.seenPositionKeys.delete(positionKey);
+      }
+    } else {
+      this.seenPositionKeys.add(`${userId}:${normSymbol}`);
+    }
+
     this.emit(
       event(
         "diagnostic",
@@ -491,6 +533,10 @@ export class TradingCore {
         openSide === null ||
         openSide === existing.side
       ) {
+        // Позиция жива, но на бирже уже сработал защитный ордер (стоп-лосс
+        // или тейк-профит не в статусе active) — фиксируем это в логах,
+        // чтобы срабатывание стопа/тейка было видно без зависимости от бота.
+        await this.logProtectiveOrderStatus(userId, normSymbol, requestId);
         return events;
       }
       const key = lockKey(
@@ -518,6 +564,7 @@ export class TradingCore {
           action: "close",
           quantity: existing.quantity,
         });
+        this.seenPositionKeys.delete(`${userId}:${normSymbol}`);
         this.emit(
           event(
             "trade_close",
@@ -593,10 +640,33 @@ export class TradingCore {
         settings.riskPerTradePercent * aiModeMultiplier(settings.aiMode),
         settings.riskPerTradePercent
       );
+      // Риск на сделку задаётся как стоп-лосс в процентах от цены входа.
+      // Бюджет риска в деньгах = баланс × риск%. Позиция открывается так,
+      // чтобы при срабатывании стопа потеря не превышала этот бюджет:
+      // notional = рискБюджет / (стоп% / 100). Так риск-менеджмент подгоняет
+      // размер позиции под стоп, а маржа (при макс. плече) уходит минимальной.
+      const riskBudget =
+        (snapshot.account.balance * effectiveRiskPercent) / 100;
+      const stopFraction = settings.stopLossPercent / 100;
+      const riskSizedNotional =
+        stopFraction > 0 ? riskBudget / stopFraction : riskBudget;
       const notional = Math.min(
-        (snapshot.account.balance * effectiveRiskPercent) / 100,
+        riskSizedNotional,
         snapshot.account.availableCash
       );
+      // Стоп-лосс и тейк-профит считаются от цены входа по настройкам:
+      // для long стоп ниже входа, тейк выше; для short наоборот. Тейк на
+      // расстоянии RR × стоп. Квадратное округление гарантирует, что стоп не
+      // больше заданного процента.
+      const stopPct = settings.stopLossPercent;
+      const rr = settings.riskRewardRatio;
+      const stopDistance = price * (stopPct / 100);
+      const stopTriggerPrice =
+        openSide === "long" ? price - stopDistance : price + stopDistance;
+      const takeTriggerPrice =
+        openSide === "long"
+          ? price + stopDistance * rr
+          : price - stopDistance * rr;
       const decision = await this.deps.riskManager.checkOpenTrade(
         userId,
         normSymbol,
@@ -718,15 +788,26 @@ export class TradingCore {
         action: "open",
         quantity,
         price,
+        stopTriggerPrice,
+        takeTriggerPrice,
       });
       await this.deps.riskManager.recordOpenedTrade(userId);
+      this.seenPositionKeys.add(`${userId}:${normSymbol}`);
       this.emit(
         event(
           "trade_open",
           userId,
           normSymbol,
           `Открыта позиция ${openSide} ${quantity} по ${receipt.executedPrice}`,
-          { source, receipt, quantity, requestId },
+          {
+            source,
+            receipt,
+            quantity,
+            stopTriggerPrice,
+            takeTriggerPrice,
+            protectiveOrders: receipt.protectiveOrders ?? [],
+            requestId,
+          },
           requestId
         )
       );
@@ -744,6 +825,9 @@ export class TradingCore {
           price: receipt.executedPrice,
           executedAt: receipt.executedAt,
           source,
+          stopTriggerPrice,
+          takeTriggerPrice,
+          protectiveOrders: receipt.protectiveOrders ?? [],
           signal: {
             action: signal.action,
             confidence: signal.confidence,
@@ -784,6 +868,118 @@ export class TradingCore {
       broker.getPositions(),
     ]);
     return { account, positions };
+  }
+
+  /**
+   * Логирует статусы висящих на бирже защитных ордеров (стоп-лосс/тейк-профит).
+   * Если хотя бы один защитный ордер ушёл из active (сработал), пишет
+   * отдельное событие diagnose, чтобы срабатывание стопа/тейка было видно
+   * в логах, даже когда закрытие произошло на бирже без участия бота.
+   */
+  protected async logProtectiveOrderStatus(
+    userId: number,
+    symbol: string,
+    requestId?: string
+  ): Promise<void> {
+    let protectiveOrders: BrokerOpenOrder[] = [];
+    let broker: BaseBroker | null = null;
+    try {
+      const now = Date.now();
+      const cacheKey = `${userId}:${symbol}`;
+      const lastChecked = this.protectiveStatusCheckedAt.get(cacheKey) ?? 0;
+      if (now - lastChecked < PROTECTIVE_STATUS_CHECK_INTERVAL_MS) {
+        return;
+      }
+      this.protectiveStatusCheckedAt.set(cacheKey, now);
+      broker = await this.deps.resolveBroker(userId);
+      if (broker) {
+        protectiveOrders = await broker.getOpenOrders();
+      }
+    } catch (error) {
+      this.emit(
+        event(
+          "diagnostic",
+          userId,
+          symbol,
+          `Не удалось проверить статусы защитных ордеров: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          { source: "protective_order" },
+          requestId ?? createRequestId()
+        )
+      );
+      return;
+    }
+    if (!broker) {
+      return;
+    }
+
+    const marketKey = symbol.trim().toUpperCase();
+    const relevant = protectiveOrders.filter((order) => {
+      const rawSymbol = String(order.symbol ?? "").toUpperCase();
+      const type = String(order.type ?? "").toLowerCase();
+      const isProtective = type.includes("stop") || type.includes("take");
+      return (
+        isProtective &&
+        (rawSymbol === "" ||
+          rawSymbol.includes(marketKey) ||
+          marketKey.includes(rawSymbol))
+      );
+    });
+
+    if (relevant.length > 0) {
+      const triggered = relevant.filter(
+        (order) => String(order.status ?? "").toLowerCase() !== "active"
+      );
+      // Пишем событие только когда статус защитных ордеров изменился,
+      // чтобы не засорять логи одинаковыми статусами на каждом тике цикла.
+      const cacheKey = `${userId}:${symbol}`;
+      const statusDigest = relevant
+        .map((order) => `${order.type}:${order.status}`)
+        .sort()
+        .join(",");
+      const cached = this.protectiveStatusCache.get(cacheKey);
+      if (cached === statusDigest) {
+        return;
+      }
+      this.protectiveStatusCache.set(cacheKey, statusDigest);
+      if (triggered.length > 0) {
+        this.emit(
+          event(
+            "diagnostic",
+            userId,
+            symbol,
+            `Сработал защитный ордер на бирже: ${triggered
+              .map((order) => `${order.type} (${order.status})`)
+              .join(", ")}`,
+            {
+              source: "protective_order",
+              triggeredOrders: triggered,
+              activeOrders: relevant.filter(
+                (order) => String(order.status ?? "").toLowerCase() === "active"
+              ),
+              requestId: requestId ?? undefined,
+            },
+            requestId
+          )
+        );
+      } else {
+        this.emit(
+          event(
+            "diagnostic",
+            userId,
+            symbol,
+            "Защитные ордера висят на бирже (active)",
+            {
+              source: "protective_order",
+              protectiveOrders: relevant,
+              requestId: requestId ?? undefined,
+            },
+            requestId
+          )
+        );
+      }
+    }
   }
 
   /**

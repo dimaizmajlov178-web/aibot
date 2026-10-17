@@ -55,8 +55,15 @@ function formatPortfolioContext(portfolio: PortfolioContext): string {
     `P&L за день: ${money(portfolio.dailyPnl)}`,
     `P&L общий: ${money(portfolio.totalPnl)}`,
     `Риск на сделку: ${round(portfolio.riskPerTradePercent)}%`,
+    `Стоп-лосс: ${round(portfolio.stopLossPercent)}% от цены входа`,
+    `Тейк-профит (RR): ${round(portfolio.riskRewardRatio)}`,
     `Максимум позиций: ${portfolio.maxPositions}`,
   ];
+  if (portfolio.avgHoldingTimeHours !== null) {
+    lines.push(
+      `Среднее время удержания сделки: ${round(portfolio.avgHoldingTimeHours)} ч`
+    );
+  }
 
   if (portfolio.positions.length === 0) {
     lines.push("Открытых позиций: нет");
@@ -114,6 +121,10 @@ export function buildSignalPrompt(
     "2. Не открывай сделку, если это увеличит число позиций сверх максимума.",
     "3. При входе всегда указывай stopLoss и takeProfit.",
     "4. riskPercent не должен превышать лимит риска на сделку.",
+    "5. Стоп-лосс на бирже выставляется автоматически по настройке (стоп в % от",
+    "   цены входа), тейк-профит — по соотношению риска к прибыли (RR).",
+    "   Учитывай среднее время удержания сделки: не планируй сделку на срок,",
+    "   заметно больший типичного удержания, если на то нет явных причин по данным.",
     "",
     "ОТВЕТ: верни ТОЛЬКО валидный JSON без пояснений по схеме:",
     `{"action": "buy"|"sell"|"hold", "side": "long"|"short"|"none", "confidence": 0-100, "entryPrice": number|null, "stopLoss": number|null, "takeProfit": number|null, "riskPercent": 0-100, "reasoning": "краткое обоснование"}`,

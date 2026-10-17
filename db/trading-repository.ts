@@ -43,6 +43,8 @@ export function createInMemoryTradingStateRepository(): TradingStateRepository {
 interface SettingsItem {
   userId: number;
   riskPerTradePercent: number;
+  stopLossPercent: number;
+  riskRewardRatio: number;
   maxPositions: number;
   dailyTradeLimit: number;
   maxDailyDrawdownPercent: number;
@@ -56,6 +58,8 @@ function toSettingsItem(settings: TradingSettings): SettingsItem {
   return {
     userId: settings.userId,
     riskPerTradePercent: settings.riskPerTradePercent,
+    stopLossPercent: settings.stopLossPercent,
+    riskRewardRatio: settings.riskRewardRatio,
     maxPositions: settings.maxPositions,
     dailyTradeLimit: settings.dailyTradeLimit,
     maxDailyDrawdownPercent: settings.maxDailyDrawdownPercent,
@@ -70,6 +74,11 @@ function fromSettingsItem(item: SettingsItem): TradingSettings {
   return {
     userId: item.userId,
     riskPerTradePercent: item.riskPerTradePercent,
+    // Поля стоп-лосса и RR появились позже остальных настроек: для старых
+    // записей в БД подставляем дефолты (стоп = риск, RR = 2), чтобы
+    // существующие пользователи не теряли защитные ордера.
+    stopLossPercent: item.stopLossPercent ?? item.riskPerTradePercent,
+    riskRewardRatio: item.riskRewardRatio ?? 2,
     maxPositions: item.maxPositions,
     dailyTradeLimit: item.dailyTradeLimit,
     maxDailyDrawdownPercent: item.maxDailyDrawdownPercent,
