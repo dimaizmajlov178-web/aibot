@@ -23,6 +23,8 @@ const DEFAULT_ACCOUNT_CACHE_MS = 60_000;
 const DEFAULT_MARKET_CACHE_MS = 300_000;
 const POSITION_LOOKUP_ATTEMPTS = 8;
 const POSITION_LOOKUP_DELAY_MS = 500;
+const PROTECTIVE_ORDER_RECHECK_ATTEMPTS = 4;
+const PROTECTIVE_ORDER_RECHECK_DELAY_MS = 700;
 
 type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 
@@ -579,7 +581,7 @@ export class UpscaleBroker extends BaseBroker {
         `Нет цены для открытия ${order.symbol}: укажите price или дождитесь indexPrice`
       );
     }
-    const leverage = this.resolveLeverage(market);
+    const leverage = this.resolveLeverage(market, order);
     // Стоп-лосс и тейк-профит отправляются вместе с ордером на открытие
     // (поля stopTriggerPrice / takeTriggerPrice в POST /orders). Цены —
     // абсолютные, в формате fp9: для long стоп ниже цены входа, тейк выше;
@@ -595,6 +597,8 @@ export class UpscaleBroker extends BaseBroker {
       stopTriggerPrice !== null ? toFp9(stopTriggerPrice) : null;
     const takeTriggerPriceFp9 =
       takeTriggerPrice !== null ? toFp9(takeTriggerPrice) : null;
+    const hasProtective =
+      stopTriggerPriceFp9 !== null || takeTriggerPriceFp9 !== null;
     const notional = order.quantity * price;
     if (!(notional > 0)) {
       throw new BrokerConnectionError("Некорректный объём ордера");
@@ -606,12 +610,14 @@ export class UpscaleBroker extends BaseBroker {
     const amountFp9 = toFp9(amount);
     const leverageFp9 = toFp9(leverage);
     // expectedAmount — базовый размер актива для проверки проскальзывания.
-    // '0' отключает проверку (офиц. пример для market-ордера). Не передаём
-    // notional (quote-сумму в котируемой валюте): движок брокера трактует
-    // его как размер в базовом активе, из-за чего ордер зависал в active
-    // (indexPrice:null, filledAmount:null) и позиция не создавалась.
-    const expectedAmountFp9 = "0";
-
+    // '0' отключает проверку (офиц. пример для market-ордера): сохранённый
+    // размер позиции движка уже округлён, а фактический размер после комиссий
+    // может отличаться от расчётного, поэтому жёсткий expectedAmount
+    // (slippage_tolerance) может сорвать исполнение. Стоп-лосс/тейк-профит
+    // отправляются вместе с ордером (поля stopTriggerPrice/takeTriggerPrice);
+    // если Upscale их не разместил, они гарантированно выставляются явными
+    // close-ордерами (см. ensureProtectiveOrders).
+    const expectedAmount = "0";
     defaultLogger
       .child({ service: "broker" })
       .debug(`[upscale] параметры market-ордера на открытие`, {
@@ -625,7 +631,7 @@ export class UpscaleBroker extends BaseBroker {
         leverage,
         amountFp9,
         leverageFp9,
-        expectedAmountFp9,
+        expectedAmount,
         stopTriggerPriceFp9,
         takeTriggerPriceFp9,
       });
@@ -637,7 +643,7 @@ export class UpscaleBroker extends BaseBroker {
       direction,
       amount: amountFp9,
       leverage: leverageFp9,
-      expectedAmount: expectedAmountFp9,
+      expectedAmount,
       ...(stopTriggerPriceFp9 ? { stopTriggerPrice: stopTriggerPriceFp9 } : {}),
       ...(takeTriggerPriceFp9 ? { takeTriggerPrice: takeTriggerPriceFp9 } : {}),
     });
@@ -751,13 +757,44 @@ export class UpscaleBroker extends BaseBroker {
     const executedPrice = this.positionEntryPrice(position, market);
     const quantity = fromFp9(position.size);
 
-    // После подтверждения позиции смотрим висящие на бирже ордера:
-    // статусы защитных стоп/тейк должны быть active — они не зависят от
-    // работы бота. Список также уходит в чек движка (trade_open).
-    const protectiveOrders = await this.collectProtectiveOrders(
+    // После подтверждения позиции смотрим висящие на бирже ордера: статусы
+    // защитных стоп/тейк должны быть active. Если прикреплённые к market-
+    // ордеру stopTriggerPrice/takeTriggerPrice не разместились (например,
+    // Upscale отбросил их из-за цены ликвидации/минимальной дистанции), —
+    // размещаем их явными close-ордерами (stop/take), привязанными к позиции.
+    let protectiveOrders = await this.collectProtectiveOrders(
       accountId,
-      marketId
+      marketId,
+      this.marketSymbol(market)
     );
+    if (hasProtective) {
+      const result = await this.ensureProtectiveOrders({
+        accountId,
+        marketId,
+        position,
+        orderQuantity: order.quantity,
+        symbol: this.marketSymbol(market),
+        stopTriggerPrice,
+        takeTriggerPrice,
+        protectiveOrders,
+      });
+      protectiveOrders = result.protectiveOrders;
+      if (result.placedCount > 0) {
+        defaultLogger
+          .child({ service: "broker" })
+          .warn(
+            `[upscale] защитные ордера не были размещены вместе с market-ордером — размещены явными ордерами (попыток: ${result.placedCount})`,
+            {
+              symbol: order.symbol,
+              side: direction,
+              marketId,
+              orderId: String(response.id ?? "?"),
+              stopTriggerPrice,
+              takeTriggerPrice,
+            }
+          );
+      }
+    }
     if (protectiveOrders.length > 0) {
       defaultLogger
         .child({ service: "broker" })
@@ -768,17 +805,20 @@ export class UpscaleBroker extends BaseBroker {
           orderId: String(response.id ?? "?"),
           protectiveOrders,
         });
-    } else {
+    } else if (hasProtective) {
       defaultLogger
         .child({ service: "broker" })
-        .warn(`[upscale] защитные стоп/тейк ордера не найдены в активных`, {
-          symbol: order.symbol,
-          side: direction,
-          marketId,
-          orderId: String(response.id ?? "?"),
-          stopTriggerPrice,
-          takeTriggerPrice,
-        });
+        .error(
+          `[upscale] защитные стоп/тейк ордера НЕ размещены: позиция открыта без стоп-лосса`,
+          {
+            symbol: order.symbol,
+            side: direction,
+            marketId,
+            orderId: String(response.id ?? "?"),
+            stopTriggerPrice,
+            takeTriggerPrice,
+          }
+        );
     }
 
     return {
@@ -1171,16 +1211,34 @@ export class UpscaleBroker extends BaseBroker {
     return String(value ?? "").toLowerCase() === "short" ? "short" : "long";
   }
 
-  private resolveLeverage(market: UpscaleMarket): number {
+  private resolveLeverage(market: UpscaleMarket, order: OrderRequest): number {
     const settings = asRecord(market.settings);
     const min = fromFp9(readString(settings, "minLeverage"));
     const max = fromFp9(readString(settings, "maxLeverage"));
-    // Сделки открываются с МАКСИМАЛЬНЫМ плечом, разрешённым рынком/фазой:
-    // маржа (amount = notional / leverage) при этом минимальна, а
-    // риск-менеджмент отдельно подгоняет размер позиции под стоп.
+    // Сделки открываются с максимально возможным плечом: маржа
+    // (amount = notional / leverage) при этом минимальна, а риск-менеджмент
+    // отдельно подгоняет размер позиции под стоп.
     let leverage = max > 0 ? max : 1;
     if (min > 0 && leverage < min) {
       leverage = min;
+    }
+    // Если вместе с ордером идёт стоп-лосс, плечо ОГРАНИЧИВАЕТСЯ сверху,
+    // чтобы стоп не оказывался за ценой ликвидации позиции. Upscale
+    // проверяет прикреплённые stopTriggerPrice/takeTriggerPrice против цены
+    // ликвидации ПОСЛЕ исполнения (trigger_price_lt/gt_liquidation): при
+    // большом плече цена ликвидации близка к цене входа, и стоп в заданном
+    // проценте выходит за неё — API не размещает защитные ордера, хотя
+    // позиция открывается. Теоретическая цена ликвидации long ≈ вход ×
+    // (1 − 1/leverage), поэтому стоп ~вход × (1 − stopFraction) исполним при
+    // leverage < 1/stopFraction. Держим запас 15% на комиссии/маржу
+    // поддержания: leverage ≈ 0.85/stopFraction.
+    const stopLossPercent = order.stopLossPercent ?? order.riskPerTradePercent;
+    if (order.stopTriggerPrice && stopLossPercent && stopLossPercent > 0) {
+      const stopFraction = Math.min(stopLossPercent / 100, 0.99);
+      const liquidationSafeLeverage = 0.85 / stopFraction - 1;
+      if (leverage > liquidationSafeLeverage) {
+        leverage = Math.max(min > 0 ? min : 1, liquidationSafeLeverage);
+      }
     }
     return leverage;
   }
@@ -1362,7 +1420,8 @@ export class UpscaleBroker extends BaseBroker {
    */
   private async collectProtectiveOrders(
     accountId: string,
-    marketId?: string
+    marketId?: string,
+    symbol?: string
   ): Promise<BrokerOpenOrder[]> {
     try {
       const orders = await this.fetchActiveOrders(accountId);
@@ -1390,7 +1449,7 @@ export class UpscaleBroker extends BaseBroker {
           const marketRef = String(order.marketId ?? order.market ?? "");
           return {
             id: String(order.id ?? order.orderId ?? "?"),
-            symbol: marketRef,
+            symbol: symbol && symbol.trim() !== "" ? symbol : marketRef,
             type: order.type ?? "?",
             status: order.status ?? "active",
             side: this.normalizeDirection(order.direction),
@@ -1415,26 +1474,263 @@ export class UpscaleBroker extends BaseBroker {
     }
   }
 
+  /**
+   * Гарантирует размещение защитных стоп/тейк ордеров на бирже. Upscale при
+   * создании market-ордера может не разместить прикреплённые stopTriggerPrice/
+   * takeTriggerPrice (например, цена ликвидации после исполнения ближе к цене
+   * входа, чем стоп, или минимальная дистанция стопа). В этом случае
+   * размещаем их явными close-ордерами (`stop`/`take`), привязанными к
+   * открытой позиции через positionId. Возвращает число явных размещений
+   * (0 — прикреплённые стоп/тейк уже висят на бирже либо защита не нужна).
+   */
+  private async ensureProtectiveOrders(options: {
+    accountId: string;
+    marketId: string;
+    position: UpscalePosition;
+    orderQuantity: number;
+    symbol?: string;
+    stopTriggerPrice: number | null;
+    takeTriggerPrice: number | null;
+    protectiveOrders: BrokerOpenOrder[];
+  }): Promise<{ protectiveOrders: BrokerOpenOrder[]; placedCount: number }> {
+    let { protectiveOrders } = options;
+    let placedCount = 0;
+
+    const placeCloseOrder = async (
+      type: "stop" | "take",
+      triggerPrice: number
+    ): Promise<BrokerOpenOrder | null> => {
+      try {
+        // amount для close-ордера — размер позиции в БАЗОВОМ активе (fp9).
+        // Берём его из подтверждённой позиции; если размер неизвестен — из
+        // запрошенного объёма движка.
+        const rawSize = readString(asRecord(options.position), "size");
+        const sizeFromPosition = rawSize !== undefined ? fromFp9(rawSize) : 0;
+        const sizeHuman =
+          sizeFromPosition > 0 ? sizeFromPosition : options.orderQuantity;
+        const positionId = options.position.idx ?? options.position.id;
+        if (!positionId || String(positionId) === "") {
+          defaultLogger
+            .child({ service: "broker" })
+            .warn(
+              `[upscale] не удалось разместить явный защитный ордер: нет positionId у позиции`,
+              {
+                type,
+                marketId: options.marketId,
+              }
+            );
+          return null;
+        }
+        if (!(sizeHuman > 0)) {
+          defaultLogger
+            .child({ service: "broker" })
+            .warn(
+              `[upscale] не удалось разместить явный защитный ордер: неизвестен размер позиции`,
+              {
+                type,
+                marketId: options.marketId,
+                positionId,
+              }
+            );
+          return null;
+        }
+        const response = await this.createOrder({
+          accountId: options.accountId,
+          marketId: options.marketId,
+          type,
+          direction: this.normalizeDirection(options.position.direction),
+          positionId,
+          amount: toFp9(sizeHuman),
+          triggerPrice: toFp9(triggerPrice),
+        });
+        const status = this.orderStatusOf(response);
+        if (status === "active" || status === "executed") {
+          placedCount += 1;
+          defaultLogger
+            .child({ service: "broker" })
+            .info(`[upscale] размещён защитный ордер явным close-ордером`, {
+              type,
+              triggerPrice,
+              marketId: options.marketId,
+              orderId: String(response.id ?? response.orderId ?? "?"),
+              status,
+            });
+          return {
+            id: String(response.id ?? response.orderId ?? "?"),
+            symbol:
+              options.symbol && options.symbol.trim() !== ""
+                ? options.symbol
+                : options.marketId,
+            type,
+            status: this.statusLabel(status),
+            side: this.normalizeDirection(options.position.direction),
+            triggerPrice,
+            price: triggerPrice,
+            amount: this.readHuman(response.amount) ?? undefined,
+            errorCode: response.errorCode ?? response.error ?? null,
+            createdAt: response.createdAt
+              ? toIso(response.createdAt)
+              : undefined,
+          };
+        }
+        defaultLogger
+          .child({ service: "broker" })
+          .warn(`[upscale] явный защитный ордер не активирован брокером`, {
+            type,
+            triggerPrice,
+            marketId: options.marketId,
+            orderId: String(response.id ?? response.orderId ?? "?"),
+            status,
+            errorCode: response.errorCode ?? response.error ?? null,
+          });
+        return null;
+      } catch (error) {
+        defaultLogger
+          .child({ service: "broker" })
+          .warn(`[upscale] не удалось разместить явный защитный ордер`, {
+            type,
+            triggerPrice,
+            marketId: options.marketId,
+            error: errorMessage(error),
+          });
+        return null;
+      }
+    };
+
+    // Несколько опросов активных ордеров: прикреплённые стоп/тейк могут
+    // появиться с задержкой после исполнения market-ордера.
+    for (
+      let attempt = 1;
+      attempt <= PROTECTIVE_ORDER_RECHECK_ATTEMPTS &&
+      this.missingTypes(
+        protectiveOrders,
+        options.stopTriggerPrice,
+        options.takeTriggerPrice
+      ).length > 0;
+      attempt += 1
+    ) {
+      protectiveOrders = await this.collectProtectiveOrders(
+        options.accountId,
+        options.marketId,
+        options.symbol
+      );
+      if (
+        this.missingTypes(
+          protectiveOrders,
+          options.stopTriggerPrice,
+          options.takeTriggerPrice
+        ).length === 0
+      ) {
+        break;
+      }
+      if (attempt < PROTECTIVE_ORDER_RECHECK_ATTEMPTS) {
+        await this.sleep(PROTECTIVE_ORDER_RECHECK_DELAY_MS);
+      }
+    }
+
+    const missing = this.missingTypes(
+      protectiveOrders,
+      options.stopTriggerPrice,
+      options.takeTriggerPrice
+    );
+    const needsStop = missing.includes("stop");
+    const needsTake = missing.includes("take");
+
+    if (needsStop || needsTake) {
+      if (options.position.idx && options.position.idx !== "") {
+        if (needsStop) {
+          const placed = await placeCloseOrder(
+            "stop",
+            options.stopTriggerPrice as number
+          );
+          if (placed) {
+            protectiveOrders.push(placed);
+          }
+        }
+        if (needsTake) {
+          const placed = await placeCloseOrder(
+            "take",
+            options.takeTriggerPrice as number
+          );
+          if (placed) {
+            protectiveOrders.push(placed);
+          }
+        }
+      } else {
+        defaultLogger
+          .child({ service: "broker" })
+          .warn(
+            `[upscale] пропущено явное размещение защитных ордеров: у позиции нет positionId`,
+            {
+              marketId: options.marketId,
+              needsStop,
+              needsTake,
+            }
+          );
+      }
+    }
+
+    return { protectiveOrders, placedCount };
+  }
+
+  /**
+   * Типы защитных ордеров (stop/take), которые ещё не размещены на бирже.
+   * Позиция защищена, только когда на бирже висят и стоп-лосс, и тейк-профит.
+   */
+  private missingTypes(
+    orders: BrokerOpenOrder[],
+    stopTriggerPrice: number | null,
+    takeTriggerPrice: number | null
+  ): ("stop" | "take")[] {
+    const missing: ("stop" | "take")[] = [];
+    if (
+      stopTriggerPrice &&
+      stopTriggerPrice > 0 &&
+      !this.hasType(orders, "stop")
+    ) {
+      missing.push("stop");
+    }
+    if (
+      takeTriggerPrice &&
+      takeTriggerPrice > 0 &&
+      !this.hasType(orders, "take")
+    ) {
+      missing.push("take");
+    }
+    return missing;
+  }
+
+  private hasType(orders: BrokerOpenOrder[], type: "stop" | "take"): boolean {
+    return orders.some((order) =>
+      String(order.type ?? "")
+        .toLowerCase()
+        .includes(type)
+    );
+  }
+
+  /** Нормализует статус ордера для BrokerOpenOrder (active/executed). */
+  private statusLabel(status: string): string {
+    return status;
+  }
+
   async getOpenOrders(): Promise<BrokerOpenOrder[]> {
     const account = await this.resolveAccount();
     const accountId = this.accountIdOf(account);
     const orders = await this.fetchActiveOrders(accountId);
-    return orders.map(
-      (order): BrokerOpenOrder => ({
-        id: String(order.id ?? order.orderId ?? "?"),
-        symbol: String(order.marketId ?? order.market ?? ""),
-        type: order.type ?? "?",
-        status: order.status ?? "?",
-        side: this.normalizeDirection(order.direction),
-        triggerPrice: order.price ?? undefined,
-        price: order.price ?? undefined,
-        amount: order.amount ?? undefined,
-        filledAmount: order.filledAmount ?? undefined,
-        leverage: order.leverage ?? undefined,
-        errorCode: order.errorCode ?? null,
-        createdAt: order.createdAt ? toIso(order.createdAt) : undefined,
-      })
-    );
+    return orders.map((order): BrokerOpenOrder => ({
+      id: String(order.id ?? order.orderId ?? "?"),
+      symbol: String(order.marketId ?? order.market ?? ""),
+      type: order.type ?? "?",
+      status: order.status ?? "?",
+      side: this.normalizeDirection(order.direction),
+      triggerPrice: order.price ?? undefined,
+      price: order.price ?? undefined,
+      amount: order.amount ?? undefined,
+      filledAmount: order.filledAmount ?? undefined,
+      leverage: order.leverage ?? undefined,
+      errorCode: order.errorCode ?? null,
+      createdAt: order.createdAt ? toIso(order.createdAt) : undefined,
+    }));
   }
 
   private async fetchMarkets(accountId: string): Promise<UpscaleMarket[]> {

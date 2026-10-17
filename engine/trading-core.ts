@@ -788,24 +788,42 @@ export class TradingCore {
         action: "open",
         quantity,
         price,
+        riskPerTradePercent: settings.riskPerTradePercent,
+        stopLossPercent: settings.stopLossPercent,
+        riskRewardRatio: settings.riskRewardRatio,
         stopTriggerPrice,
         takeTriggerPrice,
       });
       await this.deps.riskManager.recordOpenedTrade(userId);
       this.seenPositionKeys.add(`${userId}:${normSymbol}`);
+      const protective = receipt.protectiveOrders ?? [];
+      const protectiveSummary =
+        protective.length > 0
+          ? `, защитные ордера: ${protective
+              .map(
+                (order) =>
+                  `${order.type} (${order.status})${order.triggerPrice ? ` @ ${order.triggerPrice}` : ""}`
+              )
+              .join(", ")}`
+          : "";
       this.emit(
         event(
           "trade_open",
           userId,
           normSymbol,
-          `Открыта позиция ${openSide} ${quantity} по ${receipt.executedPrice}`,
+          `Открыта позиция ${openSide} ${quantity} по ${receipt.executedPrice}${protectiveSummary}`,
           {
             source,
             receipt,
             quantity,
+            settings: {
+              riskPerTradePercent: settings.riskPerTradePercent,
+              stopLossPercent: settings.stopLossPercent,
+              riskRewardRatio: settings.riskRewardRatio,
+            },
             stopTriggerPrice,
             takeTriggerPrice,
-            protectiveOrders: receipt.protectiveOrders ?? [],
+            protectiveOrders: protective,
             requestId,
           },
           requestId
@@ -828,6 +846,10 @@ export class TradingCore {
           stopTriggerPrice,
           takeTriggerPrice,
           protectiveOrders: receipt.protectiveOrders ?? [],
+          settings: {
+            stopLossPercent: settings.stopLossPercent,
+            riskRewardRatio: settings.riskRewardRatio,
+          },
           signal: {
             action: signal.action,
             confidence: signal.confidence,
