@@ -123,6 +123,8 @@ export function buildSignalPrompt(
     "4. riskPercent не должен превышать лимит риска на сделку.",
     "5. Стоп-лосс на бирже выставляется автоматически по настройке (стоп в % от",
     "   цены входа), тейк-профит — по соотношению риска к прибыли (RR).",
+    "6. Prefer SHORT trades: plan to close the position within 1-2 hours.",
+    "   Do not enter if your scenario requires holding much longer.",
     "   Учитывай среднее время удержания сделки: не планируй сделку на срок,",
     "   заметно больший типичного удержания, если на то нет явных причин по данным.",
     "",
