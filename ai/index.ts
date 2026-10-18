@@ -27,6 +27,7 @@ export type {
 } from "./provider";
 export { isTransientAiError } from "./provider";
 export {
+  RealMarketDataProvider,
   StubMarketDataProvider,
   DEFAULT_CANDLE_LIMIT,
   isKnownSymbol,

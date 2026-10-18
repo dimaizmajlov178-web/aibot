@@ -126,7 +126,7 @@ export function loadConfig(): BotConfig {
       min: 0.1,
       max: 100,
     }),
-    decisionIntervalMs: parseNumber(process.env.DECISION_INTERVAL_MS, 300_000, {
+    decisionIntervalMs: parseNumber(process.env.DECISION_INTERVAL_MS, 60_000, {
       min: 5_000,
       max: 3_600_000,
     }),

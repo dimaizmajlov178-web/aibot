@@ -44,7 +44,7 @@ import {
   AiAnalysisService,
   BrokerPortfolioProvider,
   KNOWN_SYMBOLS,
-  StubMarketDataProvider,
+  RealMarketDataProvider,
 } from "../ai";
 import { createDynamoDbAiDecisionRepository } from "../db/ai-decision-repository";
 import { createInMemoryAiDecisionRepository } from "../db/ai-decision-repository";
@@ -183,7 +183,36 @@ export async function createBot(config: BotConfig): Promise<Telegraf> {
         model: config.openRouterModel,
       })
     : undefined;
-  const marketData = new StubMarketDataProvider();
+  // Реальный источник рыночных данных для AI-анализа: цены берутся с брокера
+  // (GET /v2/markets -> state.indexPrice), а не из заглушки. Раньше ИИ видел
+  // выдуманные детерминированные свечи (часто «падающие») и открывал только
+  // шорты; теперь тренд отражает реальное движение цены, поэтому бот видит
+  // и рост, и падение и может открывать лонги.
+  const marketData = new RealMarketDataProvider(async () => {
+    const userIds = await service.listUserIds().catch(() => [] as number[]);
+    const prices = new Map<string, number>();
+    for (const userId of userIds) {
+      try {
+        const broker = await service.getBrokerForUser(userId);
+        const getMarkets = (
+          broker as unknown as {
+            getMarkets?: () => Promise<Array<{ symbol: string; indexPrice: number }>>;
+          }
+        )?.getMarkets;
+        if (typeof getMarkets !== "function") {
+          continue;
+        }
+        const markets = await getMarkets.call(broker);
+        for (const market of markets) {
+          prices.set(market.symbol.trim().toUpperCase(), market.indexPrice);
+        }
+        break;
+      } catch {
+        continue;
+      }
+    }
+    return prices;
+  });
 
   // Дефолтные значения настроек торговли из .env (DEFAULT_RISK_PER_TRADE,
   // MAX_POSITIONS, DAILY_DRAWDOWN_LIMIT, TOTAL_DRAWDOWN_LIMIT).

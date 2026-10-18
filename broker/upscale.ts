@@ -239,7 +239,7 @@ export function toFp9(value: number): string {
   if (!Number.isFinite(value)) {
     return "0";
   }
-  return BigInt(Math.round(value * FP9)).toString();
+  return BigInt(Math.trunc(value * FP9)).toString();
 }
 
 /** fp9 -> human: целочисленная строка (или число), значение ÷ 10^9. */
@@ -697,15 +697,12 @@ export class UpscaleBroker extends BaseBroker {
         );
     }
 
-    if (orderStatus !== "executed") {
+    // Статусы rejected/canceled — реальный отказ: сразу сообщаем об ошибке.
+    if (orderStatus === "rejected" || orderStatus === "canceled") {
       const reason =
-        orderStatus === "active" || orderStatus === "pending"
-          ? `ордер завис в статусе ${orderStatus} и не исполнился`
-          : orderStatus === "canceled" || orderStatus === "cancelled"
-            ? "ордер был отменён брокером"
-            : orderStatus === "rejected"
-              ? "ордер отклонён брокером"
-              : `неожиданный статус ордера: ${orderStatus || "не указан"}`;
+        orderStatus === "rejected"
+          ? "ордер отклонён брокером"
+          : "ордер был отменён брокером";
       defaultLogger
         .child({ service: "broker" })
         .error(`[upscale] market-ордер не исполнен: ${reason}`, {
@@ -719,8 +716,28 @@ export class UpscaleBroker extends BaseBroker {
           response: responseInfo,
         });
       throw new PositionNotOpenedError(
-        `Ордер на открытие ${order.symbol} ${direction} принят брокером, но не исполнен (id=${response.id ?? "?"}): ${reason}${response.errorCode ? `, errorCode=${response.errorCode}` : ""}. Позиция не создана.`
+        `Ордер на открытие ${order.symbol} ${direction} отклонён/отменён брокером (id=${response.id ?? "?"}): ${reason}${response.errorCode ? `, errorCode=${response.errorCode}` : ""}. Позиция не создана.`
       );
+    }
+
+    // Статус active/pending — ордер принят и может исполниться с задержкой.
+    // Не считаем это ошибкой сразу: дожидаемся появления позиции (waitForPosition)
+    // и только если она так и не появилась — сообщаем о зависании. Раньше бот
+    // падал с «завис в active», хотя позиция на бирже открывалась.
+    if (orderStatus === "active" || orderStatus === "pending") {
+      defaultLogger
+        .child({ service: "broker" })
+        .warn(
+          `[upscale] market-ордер принят, статус ${orderStatus} — ждём появления позиции`,
+          {
+            symbol: order.symbol,
+            side: direction,
+            marketId,
+            orderId: String(response.id ?? response.orderId ?? "?"),
+            activeOrders,
+            response: responseInfo,
+          }
+        );
     }
 
     if (activeOrders.length > 0) {
@@ -1211,10 +1228,33 @@ export class UpscaleBroker extends BaseBroker {
     return String(value ?? "").toLowerCase() === "short" ? "short" : "long";
   }
 
+
+  /** Максимальное плечо рынка из settings Upscale. Поля maxLeverage в ответе
+   * нет: плечо задаётся через maxLeverageByAccount (по фазе счёта, fp9) и
+   * initMarginRatio (1/ratio — максимальное плечо по марже). */
+  private maxLeverageFromMarket(settings: Record<string, unknown>): number {
+    let max = 0;
+    const byAccount = settings.maxLeverageByAccount;
+    if (byAccount !== null && typeof byAccount === "object") {
+      for (const value of Object.values(byAccount as Record<string, unknown>)) {
+        const parsed = fromFp9(value);
+        if (parsed > max) {
+          max = parsed;
+        }
+      }
+    }
+    const initMarginRatio = fromFp9(readString(settings, "initMarginRatio"));
+    if (initMarginRatio > 0) {
+      const fromRatio = 1 / initMarginRatio;
+      max = max > 0 ? Math.min(max, fromRatio) : fromRatio;
+    }
+    return max;
+  }
+
   private resolveLeverage(market: UpscaleMarket, order: OrderRequest): number {
     const settings = asRecord(market.settings);
+    const max = this.maxLeverageFromMarket(settings);
     const min = fromFp9(readString(settings, "minLeverage"));
-    const max = fromFp9(readString(settings, "maxLeverage"));
     // Сделки открываются с максимально возможным плечом: маржа
     // (amount = notional / leverage) при этом минимальна, а риск-менеджмент
     // отдельно подгоняет размер позиции под стоп.
