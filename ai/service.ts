@@ -32,7 +32,7 @@ import type {
 } from "../db/ai-decision-repository";
 import { createAiDecision } from "../db/ai-decision-repository";
 
-export const DEFAULT_TIMEFRAME: Timeframe = "1h";
+export const DEFAULT_TIMEFRAME: Timeframe = "15m";
 export const DEFAULT_MAX_ATTEMPTS = 2;
 
 export interface AiAnalysisServiceDeps {

@@ -38,7 +38,7 @@ const TIMEFRAME_MS: Record<Timeframe, number> = {
   "1d": 86_400_000,
 };
 
-const DEFAULT_TIMEFRAME: Timeframe = "1h";
+const DEFAULT_TIMEFRAME: Timeframe = "15m";
 
 function hashString(input: string): number {
   let hash = 2166136261;
