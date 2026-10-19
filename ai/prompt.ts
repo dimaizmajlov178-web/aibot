@@ -13,7 +13,7 @@ function money(value: number): string {
   });
 }
 
-function formatRecentCandles(context: MarketContext, count = 12): string {
+function formatRecentCandles(context: MarketContext, count = 200): string {
   const rows = context.candles
     .slice(-count)
     .map(
@@ -42,7 +42,7 @@ function formatMarketContext(context: MarketContext): string {
     `  CVD: ${round(ind.cvd)}`,
     `  Отклонение от VWAP: ${round(ind.vwapDeviation)}%`,
     "",
-    `Последние ${12} свечей:`,
+    `Последние ${200} свечей:`,
     formatRecentCandles(context),
   ].join("\n");
 }
@@ -123,7 +123,7 @@ export function buildSignalPrompt(
     "4. riskPercent не должен превышать лимит риска на сделку.",
     "5. Стоп-лосс на бирже выставляется автоматически по настройке (стоп в % от",
     "   цены входа), тейк-профит — по соотношению риска к прибыли (RR).",
-    "6. Prefer SHORT trades: plan to close the position within 1-2 hours.",
+    "6. Prefer QUICK trades: close the position within 1-2 hours.",
     "   Do not enter if your scenario requires holding much longer.",
     "   Учитывай среднее время удержания сделки: не планируй сделку на срок,",
     "   заметно больший типичного удержания, если на то нет явных причин по данным.",
