@@ -32,6 +32,7 @@ import { formatHelp } from "./commands";
 import { registerConnectHandlers } from "./connect";
 import { registerControlHandlers } from "./control";
 import { registerStrategyHandlers } from "./strategy";
+import { registerResetCommand } from "./reset";
 import { START_TEXT } from "./messages";
 import { createConnectSessionStore } from "./sessions";
 import { attachRequestContext, getRequestContext } from "./request-context";
@@ -320,6 +321,10 @@ export async function createBot(config: BotConfig): Promise<Telegraf> {
         logger.info(`[engine] ${event.type}: ${event.message}`, fields);
       }
     },
+  });
+
+  registerResetCommand(bot, {
+    isAdmin: (userId) => isAdmin(config, userId),
   });
 
   registerControlHandlers(bot, {

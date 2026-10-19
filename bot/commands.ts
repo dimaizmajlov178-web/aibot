@@ -116,6 +116,15 @@ export const ADMIN_MENU_COMMANDS: readonly BotCommandDescriptor[] = [
   { name: "users", description: "Список пользователей и подписок" },
   { name: "broadcast", description: "Рассылка всем: /broadcast <текст>" },
   { name: "global_pause", description: "Глобальная пауза торговли у всех" },
+  {
+    name: "learning_force",
+    description: "Принудительный learning-отчёт и обновление стратегии (админ)",
+  },
+  {
+    name: "strategy_rollback",
+    description: "Откатить стратегию: /strategy_rollback <версия> (админ)",
+  },
+  { name: "reset", description: "Сбросить бота: /reset confirm (админ)" },
 ];
 
 function toTelegramCommand(descriptor: BotCommandDescriptor): {

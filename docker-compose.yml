@@ -67,6 +67,7 @@ services:
       retries: 10
 
   bot:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: Dockerfile.dev
@@ -93,7 +94,6 @@ services:
     mem_limit: ${BOT_MEMORY_LIMIT:-768m}
     memswap_limit: ${BOT_MEMORY_SWAP_LIMIT:-768m}
     cpus: ${BOT_CPU_LIMIT:-1}
-    restart: on-failure:3
     volumes:
       - .:/app
       - /app/.next

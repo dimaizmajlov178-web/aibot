@@ -63,6 +63,25 @@ export function registerStrategyHandlers(
     }
   });
 
+  bot.command("learning_force", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId == null) return;
+    if (!deps.isAdmin(userId)) {
+      await ctx.reply("Команда доступна только админу.");
+      return;
+    }
+    try {
+      const fixed = await deps.reconcile?.();
+      if (fixed && fixed > 0) {
+        await ctx.reply(`Сверка с брокером: зафиксировано закрытых сделок в learning: ${fixed}.`);
+      }
+      const report = await deps.learning.runDailyReport(userId, { force: true });
+      await ctx.reply(formatLearningReport(report));
+    } catch (error) {
+      await ctx.reply(`Ошибка отчёта: ${toErrorMessage(error)}`);
+    }
+  });
+
   bot.command("strategy", async (ctx) => {
     const userId = ctx.from?.id;
     if (userId == null) {
