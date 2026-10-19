@@ -5,7 +5,7 @@ import type { TradeSignal } from "../ai/schema";
 /** Анти-оверфит: глубина истории для анализа сделок (дней). */
 export const ANALYSIS_HISTORY_DAYS = 60;
 /** Анти-оверфит: минимум закрытых сделок для корректировки правил. */
-export const MIN_TRADES_FOR_RULES = 30;
+export const MIN_TRADES_FOR_RULES = 10;
 /** Максимум сделок, отправляемых модели в learning-промт. */
 export const LEARNING_SAMPLE_SIZE = 40;
 

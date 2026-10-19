@@ -90,7 +90,7 @@ export function createDynamoDbTradingSnapshotRepository(
             ":symbol": normSymbol,
             ":side": side,
           },
-          Limit: 1,
+          Limit: 1000,
         })
       );
       return (result.Items?.[0] as TradingSnapshot | undefined) ?? null;

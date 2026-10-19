@@ -328,8 +328,14 @@ export async function createBot(config: BotConfig): Promise<Telegraf> {
     resolveBroker: (userId) => service.getBrokerForUser(userId),
   });
 
+  const reconcileLearning = (): Promise<number> =>
+    learning.reconcileWithBroker((userId) =>
+      service.getBrokerForUser(userId)
+    );
+
   registerStrategyHandlers(bot, {
     learning,
+    reconcile: reconcileLearning,
     isAdmin: (userId) => isAdmin(config, userId),
     audit,
   });
@@ -343,6 +349,15 @@ export async function createBot(config: BotConfig): Promise<Telegraf> {
 
   if (!config.dryRun) {
     core.start();
+
+    // Каждую минуту фиксируем закрытые на бирже позиции в learning.
+    setInterval(() => {
+      reconcileLearning().catch((error) => {
+        defaultLogger.warn("ошибка сверки learning с брокером", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, 60_000).unref?.();
     const userIds = await service.listUserIds().catch(() => [] as number[]);
     defaultLogger
       .child({ service: "engine" })

@@ -11,6 +11,7 @@ import {
 
 export interface StrategyHandlersDeps {
   learning: LearningService;
+  reconcile?: () => Promise<number | void>;
   isAdmin: (userId: number) => boolean;
   /** Журнал аудита управления стратегиями. */
   audit?: AuditService;
@@ -45,6 +46,10 @@ export function registerStrategyHandlers(
     }
 
     try {
+      const fixed = await deps.reconcile?.();
+      if (fixed && fixed > 0) {
+        await ctx.reply(`Сверка с брокером: зафиксировано закрытых сделок в learning: ${fixed}.`);
+      }
       let report;
       if (force) {
         report = await deps.learning.runDailyReport(userId, { force: true });

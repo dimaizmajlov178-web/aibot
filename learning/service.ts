@@ -113,14 +113,27 @@ export class LearningService implements LearningRecorder {
   }
 
   async recordTradeClose(record: TradeCloseRecord): Promise<void> {
-    const open = await this.deps.snapshots.findOpen(
+    let open = await this.deps.snapshots.findOpen(
       record.userId,
       record.symbol,
       record.side
     );
     if (!open) {
+      // DynamoDB GSI + Limit может не найти снимок, ищем по списку пользователя.
+      const all = await this.deps.snapshots.listByUser(record.userId, 500);
+      const normSymbol = record.symbol.trim().toUpperCase();
+      open = all.find(
+        (s: any) =>
+          s.status === "open" &&
+          s.symbol === normSymbol &&
+          s.side === record.side
+      ) ?? null;
+    }
+    if (!open) {
+      console.log("[learning] recordTradeClose: open NOT FOUND", record.userId, record.symbol, record.side);
       return;
     }
+    console.log("[learning] recordTradeClose: closing", record.userId, record.symbol, record.side, "exit", record.exitPrice, "closedAt", record.closedAt);
 
     const direction = open.side === "long" ? 1 : -1;
     const notional = open.entryPrice * open.quantity;
@@ -169,6 +182,74 @@ export class LearningService implements LearningRecorder {
   // -------------------------------------------------------------------------
   // Ежедневный learning-отчёт
   // -------------------------------------------------------------------------
+
+  /**
+   * Сверяет открытые снимки с реальными позициями брокера: если позиции на
+   * бирже больше нет (стоп/тейк сработал там), сразу фиксирует закрытие
+   * в датасете learning (заполняет result и статус closed).
+   */
+  async reconcileWithBroker(
+    getBroker: (userId: number) => Promise<{
+      getPositions(): Promise<Array<{ symbol: string; side: string }>>;
+      getClosedTrades(limit?: number): Promise<Array<{ symbol: string; side: string; exitPrice: number; closedAt: string }>>;
+    } | null>
+  ): Promise<number> {
+    let fixed = 0;
+    const userIds = await this.deps.snapshots
+      .listUserIds()
+      .catch(() => [] as number[]);
+    for (const userId of userIds) {
+      const snaps = (await this.deps.snapshots.listByUser(userId, 500)).filter(
+        (s) => s.status === "open"
+      );
+      if (snaps.length === 0) continue;
+      const broker = await getBroker(userId);
+      if (!broker) continue;
+      let positionKeys = new Set<string>();
+      try {
+        positionKeys = new Set(
+          (await broker.getPositions()).map(
+            (p2) => String(p2.symbol).trim().toUpperCase() + ":" + p2.side
+          )
+        );
+      } catch {
+        continue;
+      }
+      let closedTrades: Array<any> = [];
+      for (const snap of snaps) {
+        const key = snap.symbol.trim().toUpperCase() + ":" + snap.side;
+        if (positionKeys.has(key)) continue;
+        if (closedTrades.length === 0) {
+          try {
+            closedTrades = await broker.getClosedTrades(50);
+          } catch {
+            closedTrades = [];
+          }
+        }
+        const closed = closedTrades.find(
+          (t) =>
+            String(t.symbol).trim().toUpperCase() === snap.symbol.trim().toUpperCase() &&
+            t.side === snap.side &&
+            t.closedAt >= snap.createdAt
+        );
+        if (!closed) continue;
+        console.log("[learning] reconcile: match", snap.symbol, snap.side, "created", snap.createdAt, "closedAt", closed.closedAt);
+        try {
+          await this.recordTradeClose({
+            userId,
+            symbol: snap.symbol,
+            side: snap.side,
+            exitPrice: closed.exitPrice,
+            closedAt: closed.closedAt,
+          });
+          fixed += 1;
+        } catch (e2) {
+          console.log("[learning] reconcile: recordTradeClose FAILED", snap.symbol, snap.side, e2 instanceof Error ? e2.message : String(e2));
+        }
+      }
+    }
+    return fixed;
+  }
 
   async runDailyReport(
     userId: number,
