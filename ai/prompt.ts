@@ -84,6 +84,16 @@ function formatPortfolioContext(portfolio: PortfolioContext): string {
 
 function formatAssetHistory(context: MarketContext): string {
   const closes = context.candles.map((candle) => candle.close);
+  const now = closes[closes.length - 1] ?? 0;
+  const changePct = (hours: number): string => {
+    const idx = closes.length - 1 - Math.round((hours * 60) / 15);
+    const base = closes[Math.max(0, idx)] ?? 0;
+    if (!(base > 0) || !(now > 0)) {
+      return "нет данных";
+    }
+    const pct = ((now - base) / base) * 100;
+    return `${pct >= 0 ? "+" : ""}${round(pct)}%`;
+  };
   const start = closes[0] ?? 0;
   const end = closes[closes.length - 1] ?? 0;
   const change = start !== 0 ? ((end - start) / Math.abs(start)) * 100 : 0;
@@ -91,6 +101,11 @@ function formatAssetHistory(context: MarketContext): string {
   const low = Math.min(...closes);
 
   return [
+    "ТРЕНД (изменение цены):",
+    `  За 1 час: ${changePct(1)}`,
+    `  За 6 часов: ${changePct(6)}`,
+    `  За 24 часа: ${changePct(24)}`,
+    "",
     "История по активу (за период выборки):",
     `  Первая цена: ${round(start)}`,
     `  Последняя цена: ${round(end)}`,
@@ -124,6 +139,8 @@ export function buildSignalPrompt(
     "5. Стоп-лосс на бирже выставляется автоматически по настройке (стоп в % от",
     "   цены входа), тейк-профит — по соотношению риска к прибыли (RR).",
     "6. Prefer QUICK trades: close the position within 1-2 hours.",
+    "TREND BIAS OVERRIDE (symmetrical, 1h horizon): the bot trades on 15m candles and holds positions 1-2 hours, so the PRIMARY filter is the 1h change, not 24h. If 1h change > +0.3%: short-term trend UP, OPEN LONG (buy\/long), do NOT open SHORT. If 1h change < -0.3%: short-term trend DOWN, OPEN SHORT (sell\/short), do NOT open LONG. If between -0.3% and +0.3%: neutral, decide by indicators (RSI, MACD, EMA, volume, CVD) freely in both directions; use 6h and 24h changes only as secondary context.",
+    "POSITION REVERSAL: if you have an open SHORT on this symbol and 1h change > +0.3%, close SHORT and OPEN LONG immediately (buy\/long). If you have an open LONG and 1h change < -0.3%, close LONG and OPEN SHORT immediately (sell\/short). Reversal overrides intraday bearish indicators when the 1h trend is opposite to the open position.",
     "   Do not enter if your scenario requires holding much longer.",
     "   Учитывай среднее время удержания сделки: не планируй сделку на срок,",
     "   заметно больший типичного удержания, если на то нет явных причин по данным.",

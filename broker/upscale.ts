@@ -877,7 +877,7 @@ export class UpscaleBroker extends BaseBroker {
       marketId,
       type: "take",
       direction,
-      amount: position.size ?? toFp9(order.quantity),
+      amount: position.size != null ? toFp9(Math.abs(fromFp9(position.size))) : toFp9(order.quantity),
       triggerPrice: "0",
       positionId: position.idx,
     });
@@ -890,7 +890,7 @@ export class UpscaleBroker extends BaseBroker {
       symbol: order.symbol,
       side: order.side,
       action: "close",
-      quantity: fromFp9(position.size) || order.quantity,
+      quantity: Math.abs(fromFp9(position.size)) || order.quantity,
       executedPrice,
       status: "filled",
       executedAt: toIso(response.createdAt),

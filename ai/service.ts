@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { defaultLogger } from "../core/logger";
 import type { MarketDataProvider } from "./market-data";
 import { DEFAULT_CANDLE_LIMIT } from "./market-data";
 import { computeIndicators } from "./indicators";
@@ -139,6 +140,15 @@ export class AiAnalysisService {
         ? buildSignalPrompt(market, portfolio)
         : buildDeepAnalysisPrompt(market, portfolio);
     const fullPrompt = buildPrompt(mode, market, portfolio);
+    defaultLogger
+      .child({ service: "ai" })
+      .info("[ai] промпт отправлен в DeepSeek (первые 1500 символов)", {
+        symbol,
+        timeframe,
+        mode,
+        promptPreview: fullPrompt.slice(0, 1500),
+        promptLength: fullPrompt.length,
+      });
     const model = this.deps.deepseek.modelFor(modelKind);
 
     const logs: AiDecision[] = [];

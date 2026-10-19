@@ -15,7 +15,7 @@ function createDocClient() {
     },
   });
 
-  return DynamoDBDocumentClient.from(client);
+  return DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
 }
 
 export const docClient = globalForDb.docClient ?? createDocClient();

@@ -644,7 +644,7 @@ export class TradingCore {
           symbol: normSymbol,
           side: existing.side,
           action: "close",
-          quantity: existing.quantity,
+          quantity: Math.abs(existing.quantity ?? 0),
         });
         this.seenPositionKeys.delete(`${userId}:${normSymbol}`);
         this.emit(
@@ -667,7 +667,7 @@ export class TradingCore {
             symbol: normSymbol,
             side: existing.side,
             action: "close",
-            quantity: existing.quantity,
+            quantity: Math.abs(existing.quantity ?? 0),
             price: receipt.executedPrice,
             executedAt: receipt.executedAt,
             source,
