@@ -45,6 +45,7 @@ interface SettingsItem {
   riskPerTradePercent: number;
   stopLossPercent: number;
   riskRewardRatio: number;
+  dailyProfitTarget: number;
   maxPositions: number;
   dailyTradeLimit: number;
   maxDailyDrawdownPercent: number;
@@ -60,6 +61,7 @@ function toSettingsItem(settings: TradingSettings): SettingsItem {
     riskPerTradePercent: settings.riskPerTradePercent,
     stopLossPercent: settings.stopLossPercent,
     riskRewardRatio: settings.riskRewardRatio,
+    dailyProfitTarget: settings.dailyProfitTarget,
     maxPositions: settings.maxPositions,
     dailyTradeLimit: settings.dailyTradeLimit,
     maxDailyDrawdownPercent: settings.maxDailyDrawdownPercent,
@@ -79,6 +81,7 @@ function fromSettingsItem(item: SettingsItem): TradingSettings {
     // существующие пользователи не теряли защитные ордера.
     stopLossPercent: item.stopLossPercent ?? item.riskPerTradePercent,
     riskRewardRatio: item.riskRewardRatio ?? 2,
+    dailyProfitTarget: item.dailyProfitTarget ?? 0,
     maxPositions: item.maxPositions,
     dailyTradeLimit: item.dailyTradeLimit,
     maxDailyDrawdownPercent: item.maxDailyDrawdownPercent,

@@ -226,13 +226,16 @@ export class LearningService implements LearningRecorder {
             closedTrades = [];
           }
         }
-        const closed = closedTrades.find(
+        const closedIdx = closedTrades.findIndex(
           (t) =>
             String(t.symbol).trim().toUpperCase() === snap.symbol.trim().toUpperCase() &&
             t.side === snap.side &&
             t.closedAt >= snap.createdAt
         );
-        if (!closed) continue;
+        if (closedIdx === -1) continue;
+        const closed = closedTrades[closedIdx];
+        if (!closed || !(closed.exitPrice > 0)) continue;
+        closedTrades.splice(closedIdx, 1);
         console.log("[learning] reconcile: match", snap.symbol, snap.side, "created", snap.createdAt, "closedAt", closed.closedAt);
         try {
           await this.recordTradeClose({

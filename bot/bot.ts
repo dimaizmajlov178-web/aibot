@@ -218,6 +218,7 @@ export async function createBot(config: BotConfig): Promise<Telegraf> {
   // Дефолтные значения настроек торговли из .env (DEFAULT_RISK_PER_TRADE,
   // MAX_POSITIONS, DAILY_DRAWDOWN_LIMIT, TOTAL_DRAWDOWN_LIMIT).
   const riskDefaults: TradingSettingsDefaults = {
+    dailyProfitTarget: 0,
     riskPerTradePercent: config.defaultRiskPerTrade,
     stopLossPercent: config.defaultRiskPerTrade,
     riskRewardRatio: 2,
@@ -295,6 +296,15 @@ export async function createBot(config: BotConfig): Promise<Telegraf> {
     resolveBroker: (userId) => service.getBrokerForUser(userId),
     resolveUserIds: () => service.listUserIds(),
     supportedSymbols: KNOWN_SYMBOLS,
+    getActiveRules: async (userId) => {
+      try {
+        const all = await learning.listStrategies(userId);
+        const active = all.find((strategy) => strategy.status === "active");
+        return active?.rules ?? [];
+      } catch {
+        return [];
+      }
+    },
     decisionIntervalMs: config.decisionIntervalMs,
     isGlobalPaused: () => subscriptions.isGlobalPaused(),
     notifyAdmin: (userId, message) => {

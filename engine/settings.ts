@@ -12,7 +12,8 @@ export const DEFAULT_AI_MODE = "balanced" as const;
 
 /** Дефолтные значения настроек торговли (переопределяются из .env). */
 export interface TradingSettingsDefaults {
-  riskPerTradePercent: number;
+  dailyProfitTarget: 0,
+    riskPerTradePercent: number;
   stopLossPercent: number;
   riskRewardRatio: number;
   maxPositions: number;
@@ -30,6 +31,7 @@ export function defaultSettings(
       defaults?.riskPerTradePercent ?? DEFAULT_RISK_PER_TRADE_PERCENT,
     stopLossPercent: defaults?.stopLossPercent ?? DEFAULT_STOP_LOSS_PERCENT,
     riskRewardRatio: defaults?.riskRewardRatio ?? DEFAULT_RISK_REWARD_RATIO,
+    dailyProfitTarget: 0,
     maxPositions: defaults?.maxPositions ?? DEFAULT_MAX_POSITIONS,
     dailyTradeLimit: DEFAULT_DAILY_TRADE_LIMIT,
     maxDailyDrawdownPercent:
@@ -63,6 +65,7 @@ export function applySettingsPatch(
       patch.riskPerTradePercent ?? settings.riskPerTradePercent,
     stopLossPercent: patch.stopLossPercent ?? settings.stopLossPercent,
     riskRewardRatio: patch.riskRewardRatio ?? settings.riskRewardRatio,
+    dailyProfitTarget: patch.dailyProfitTarget ?? settings.dailyProfitTarget,
     maxPositions: patch.maxPositions ?? settings.maxPositions,
     dailyTradeLimit: patch.dailyTradeLimit ?? settings.dailyTradeLimit,
     maxDailyDrawdownPercent:
@@ -90,6 +93,11 @@ export const tradingSettingsSchema = z.object({
     .number()
     .min(0.5, "Соотношение риска к прибыли не может быть меньше 0.5")
     .max(20, "Соотношение риска к прибыли не может превышать 20"),
+  dailyProfitTarget: z
+    .number()
+    .min(0, "Дневная цель прибыли не может быть отрицательной")
+    .max(1000000, "Слишком большая дневная цель")
+    .optional(),
   maxPositions: z
     .number()
     .int("Целое число позиций")
@@ -150,6 +158,14 @@ export function parseSettingsPayload(payload: string): TradingSettingsPatch {
         const num = Number(value);
         if (Number.isFinite(num) && num > 0) {
           patch.stopLossPercent = num;
+        }
+        break;
+      }
+      case "daily_profit":
+      case "daily_profit_target": {
+        const num = Number(value);
+        if (Number.isFinite(num) && num >= 0) {
+          patch.dailyProfitTarget = num;
         }
         break;
       }

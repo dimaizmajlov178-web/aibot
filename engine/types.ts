@@ -11,6 +11,8 @@ export interface TradingSettings {
   userId: number;
   /** Максимальный % баланса на одну сделку (например 1 -> 1%). */
   riskPerTradePercent: number;
+  /** Дневная цель прибыли в USDT; 0 = выключено. */
+  dailyProfitTarget: number;
   /**
    * Размер стоп-лосса в процентах от цены входа (например 1 -> стоп 1%).
    * По умолчанию равен риску на сделку (riskPerTradePercent), но задаётся
@@ -42,6 +44,7 @@ export interface TradingSettingsPatch {
   riskPerTradePercent?: number;
   stopLossPercent?: number;
   riskRewardRatio?: number;
+  dailyProfitTarget?: number;
   maxPositions?: number;
   dailyTradeLimit?: number;
   maxDailyDrawdownPercent?: number;

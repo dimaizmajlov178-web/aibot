@@ -14,6 +14,8 @@ import type { LockStore } from "./lock";
 import type { LearningRecorder } from "../learning/types";
 import type { AuditService } from "../core/audit";
 import { createRequestId } from "../core/request-id";
+import type { StrategyRule } from "../learning/types";
+import { evaluateStrategyRules } from "./strategy-rules";
 
 export const DEFAULT_DECISION_INTERVAL_MS = 60_000;
 export const DEFAULT_LOCK_TTL_MS = 30_000;
@@ -69,6 +71,8 @@ export interface TradingCoreDeps {
   onEvent?: (event: EngineEvent) => void;
   /** Запись датасета сделок для самообучения. */
   learning: LearningRecorder;
+  /** Правила активной стратегии пользователя - жёсткие фильтры перед входом (learning). */
+  getActiveRules?: (userId: number) => Promise<StrategyRule[]>;
   /** Глобальная пауза (/global_pause): при true торговля остановлена у всех. */
   isGlobalPaused?: () => Promise<boolean> | boolean;
   /** Журнал аудита (торговые действия, риск-блокировки, ошибки). */
@@ -224,7 +228,42 @@ export class TradingCore {
       return;
     }
 
-    for (const userId of userIds) {
+for (const userId of userIds) {
+  // Дневная цель прибыли: если достигнута — закрываем все позиции
+  // и не открываем новые до следующего дня.
+  try {
+    const settings = await this.deps.riskManager.getSettings(userId);
+    if (settings.dailyProfitTarget > 0) {
+      const broker = await this.deps.resolveBroker(userId);
+      if (!broker) {
+        continue;
+      }
+      const account = await broker.getAccount();
+      const dayPnl = account.dailyPnl;
+      const totalPnl = dayPnl;
+      this.emit(event("diagnostic", userId, "", `Дневная цель: target=${settings.dailyProfitTarget}, dayPnl=${dayPnl.toFixed(2)}, total=${totalPnl.toFixed(2)}`, { source: "timer" }, requestId));
+      if (totalPnl >= settings.dailyProfitTarget) {
+        this.emit(event("diagnostic", userId, "", `Дневная цель прибыли достигнута (${totalPnl.toFixed(2)} >= ${settings.dailyProfitTarget}): закрываю все позиции, новые сделки до следующего дня запрещены`, { source: "timer" }, requestId));
+        const positions = await broker.getPositions();
+        for (const pos of positions) {
+          try {
+            await this.deps.executor.execute(broker, {
+              symbol: pos.symbol,
+              side: pos.side,
+              action: "close",
+              quantity: Math.abs(pos.quantity ?? 0),
+            });
+            this.emit(event("trade_close", userId, pos.symbol, `Позиция закрыта по дневной цели прибыли`, { source: "timer" }, requestId));
+          } catch (e) {
+            this.emit(event("error", userId, pos.symbol, `Ошибка закрытия по дневной цели: ${e instanceof Error ? e.message : String(e)}`, { source: "timer" }, requestId));
+          }
+        }
+        continue;
+      }
+    }
+  } catch (e) {
+    this.emit(event("error", userId, "", `Ошибка проверки дневной цели прибыли: ${e instanceof Error ? e.message : String(e)}`, { source: "timer" }, requestId));
+  }
       let symbols: string[];
       try {
         symbols = await this.symbolsForUser(userId);
@@ -715,7 +754,42 @@ export class TradingCore {
       return events;
     }
 
-    const key = lockKey(userId, normSymbol, openSide);
+    // Правила активной стратегии (learning): жёсткие фильтры перед входом.
+    const activeRules = (await this.deps.getActiveRules?.(userId)) ?? [];
+    const strategyCheck = evaluateStrategyRules(
+      activeRules,
+      openSide,
+      analysis.market.indicators
+    );
+    if (strategyCheck.blocked) {
+      this.emit(
+        event(
+          "risk_block",
+          userId,
+          normSymbol,
+          strategyCheck.reasons.join("; "),
+          { code: "strategy_rule", source, requestId },
+          requestId
+        )
+      );
+      void this.deps.audit?.tradeRejected({
+        userId,
+        actorRole: "system",
+        requestId,
+        entityType: "order",
+        entityId: normSymbol,
+        details: {
+          symbol: normSymbol,
+          side: openSide,
+          code: "strategy_rule",
+          reason: strategyCheck.reasons.join("; "),
+          source,
+        },
+      });
+      return events;
+    }
+
+const key = lockKey(userId, normSymbol, openSide);
     if (!(await this.deps.lockStore.acquire(key, this.lockTtlMs))) {
       this.emit(
         event(

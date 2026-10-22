@@ -472,4 +472,7 @@ export class RiskManager {
       state: createDefaultState(0),
     };
   }
+
+  /** Сумма P&L закрытых сделок за сегодня (UTC). */
+
 }

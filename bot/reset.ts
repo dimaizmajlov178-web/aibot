@@ -18,6 +18,21 @@ const TABLES: string[] = [
   TableName.BROKER_CONNECTIONS,
 ];
 
+const KEY_BY_TABLE: Record<string, string[]> = {
+  services: ["id"],
+  ai_decisions: ["id"],
+  trading_settings: ["userId"],
+  trading_state: ["userId"],
+  trading_snapshots: ["id"],
+  learning_reports: ["id"],
+  strategies: ["id"],
+  strategy_state: ["userId"],
+  users: ["userId"],
+  global_state: ["key"],
+  audit_log: ["id"],
+  broker_connections: ["userId"],
+};
+
 async function clearTable(name: string): Promise<number> {
   let deleted = 0;
   let lastKey: Record<string, unknown> | undefined;
@@ -27,9 +42,7 @@ async function clearTable(name: string): Promise<number> {
     );
     const items = scan.Items ?? [];
     if (items.length === 0) break;
-    const keyNames = Object.keys(items[0]!).filter((k) =>
-      ["id", "userId", "key"].includes(k)
-    );
+    const keyNames = KEY_BY_TABLE[name] ?? ["id"];
     for (let i = 0; i < items.length; i += 25) {
       const chunk = items.slice(i, i + 25);
       const requests = chunk.map((item) => {
