@@ -13,7 +13,7 @@ function money(value: number): string {
   });
 }
 
-function formatRecentCandles(context: MarketContext, count = 200): string {
+function formatRecentCandles(context: MarketContext, count = 30): string {
   const rows = context.candles
     .slice(-count)
     .map(
@@ -42,7 +42,7 @@ function formatMarketContext(context: MarketContext): string {
     `  CVD: ${round(ind.cvd)}`,
     `  Отклонение от VWAP: ${round(ind.vwapDeviation)}%`,
     "",
-    `Последние ${200} свечей:`,
+    `Последние ${30} свечей:`,
     formatRecentCandles(context),
   ].join("\n");
 }
@@ -64,7 +64,6 @@ function formatPortfolioContext(portfolio: PortfolioContext): string {
       `Среднее время удержания сделки: ${round(portfolio.avgHoldingTimeHours)} ч`
     );
   }
-
   if (portfolio.positions.length === 0) {
     lines.push("Открытых позиций: нет");
   } else {
@@ -84,28 +83,12 @@ function formatPortfolioContext(portfolio: PortfolioContext): string {
 
 function formatAssetHistory(context: MarketContext): string {
   const closes = context.candles.map((candle) => candle.close);
-  const now = closes[closes.length - 1] ?? 0;
-  const changePct = (hours: number): string => {
-    const idx = closes.length - 1 - Math.round((hours * 60) / 15);
-    const base = closes[Math.max(0, idx)] ?? 0;
-    if (!(base > 0) || !(now > 0)) {
-      return "нет данных";
-    }
-    const pct = ((now - base) / base) * 100;
-    return `${pct >= 0 ? "+" : ""}${round(pct)}%`;
-  };
   const start = closes[0] ?? 0;
   const end = closes[closes.length - 1] ?? 0;
   const change = start !== 0 ? ((end - start) / Math.abs(start)) * 100 : 0;
   const high = Math.max(...closes);
   const low = Math.min(...closes);
-
   return [
-    "ТРЕНД (изменение цены):",
-    `  За 1 час: ${changePct(1)}`,
-    `  За 6 часов: ${changePct(6)}`,
-    `  За 24 часа: ${changePct(24)}`,
-    "",
     "История по активу (за период выборки):",
     `  Первая цена: ${round(start)}`,
     `  Последняя цена: ${round(end)}`,
@@ -120,8 +103,52 @@ export function buildSignalPrompt(
   portfolio: PortfolioContext
 ): string {
   return [
-    "Ты — профессиональный трейдер алгоритмической торговли.",
-    "Твоя задача — принять решение по активу на основе предоставленных данных.",
+    "Ты — старший quantitative-аналитик с 15-летним опытом в крипто- и форекс-трейдинге.",
+    "Твоя задача — оценить предоставленные данные и выдать торговый сигнал",
+    "с вероятностной оценкой, строго следуя алгоритму ниже.",
+    "",
+    "ПРАВИЛА:",
+    "1. Не выдумывай данные, которых нет. Если параметра не хватает — укажи это",
+    "   в поле \"missing_data\" и снизь уверенность.",
+    "2. Не давай сигнал, если условия входа не выполнены. \"NO_TRADE\" — это",
+    "   полноценный и часто лучший ответ.",
+    "3. Оценивай вероятность в процентах на основе соответствия чек-листу,",
+    "   а не \"на глаз\".",
+    "4. Отвечай ТОЛЬКО валидным JSON (без markdown, без пояснений вне JSON).",
+    "",
+    "АЛГОРИТМ (выполняй пошагово):",
+    "",
+    "ШАГ 1. Определи режим рынка по старшему таймфрейму (HTF):",
+    "   trend_up / trend_down / range / high_volatility / low_liquidity",
+    "   Критерии: расположение EMA50/EMA200, ADX (>25 тренд, <20 флэт),",
+    "   ширина Bollinger Bands, ATR относительно среднего.",
+    "",
+    "ШАГ 2. Проверь контекст:",
+    "   - Совпадает ли направление младшего ТФ (LTF) с HTF?",
+    "   - Есть ли подтверждение объёмом (рост объёма на импульсе)?",
+    "   - Нет ли признаков ложного пробоя (пила, длинные тени у уровня)?",
+    "",
+    "ШАГ 3. Прогони чек-лист сетапа (для long; для short зеркально):",
+    "   [ ] Цена выше EMA200 (HTF)",
+    "   [ ] EMA20 > EMA50 (LTF)",
+    "   [ ] RSI в зоне 40–65 (не перекуплен)",
+    "   [ ] MACD гистограмма растёт, выше сигнальной",
+    "   [ ] Отбой от поддержки / пробой сопротивления с ретестом",
+    "   [ ] ATR не в экстремуме (нет панической волатильности)",
+    "   [ ] Объём подтверждает движение",
+    "   [ ] Risk/Reward >= 1:2 до ближайшего сопротивления",
+    "",
+    "ШАГ 4. Посчитай score: (число выполненных пунктов / всего) * 100.",
+    "   Правила решения:",
+    "   - score >= 75 И нет критических противоречий → SIGNAL",
+    "   - 50 <= score < 75 → WEAK_SIGNAL (меньший размер позиции)",
+    "   - score < 50 ИЛИ есть критическое противоречие → NO_TRADE",
+    "",
+    "ШАГ 5. Сформируй уровни:",
+    "   - entry: цена входа",
+    "   - stop_loss: за ближайшим свингом/уровнем + буфер по ATR (1.0–1.5 ATR)",
+    "   - take_profit: ближайший значимый уровень, R:R >= 2",
+    "   - position_size_pct: 0.5–2% риска на сделку в зависимости от score",
     "",
     "КОНТЕКСТ РЫНКА:",
     formatMarketContext(context),
@@ -131,22 +158,33 @@ export function buildSignalPrompt(
     "СОСТОЯНИЕ ПОРТФЕЛЯ:",
     formatPortfolioContext(portfolio),
     "",
-    "ПРАВИЛА:",
-    "1. Учитывай тренд, моментум и риск текущего портфеля.",
-    "2. Не открывай сделку, если это увеличит число позиций сверх максимума.",
-    "3. При входе всегда указывай stopLoss и takeProfit.",
-    "4. riskPercent не должен превышать лимит риска на сделку.",
-    "5. Стоп-лосс на бирже выставляется автоматически по настройке (стоп в % от",
-    "   цены входа), тейк-профит — по соотношению риска к прибыли (RR).",
-    "6. Prefer QUICK trades: close the position within 1-2 hours.",
-    "TREND BIAS OVERRIDE (symmetrical, 1h horizon): the bot trades on 15m candles and holds positions 1-2 hours, so the PRIMARY filter is the 1h change, not 24h. If 1h change > +0.3%: short-term trend UP, OPEN LONG (buy\/long), do NOT open SHORT. If 1h change < -0.3%: short-term trend DOWN, OPEN SHORT (sell\/short), do NOT open LONG. If between -0.3% and +0.3%: neutral, decide by indicators (RSI, MACD, EMA, volume, CVD) freely in both directions; use 6h and 24h changes only as secondary context.",
-    "POSITION REVERSAL: if you have an open SHORT on this symbol and 1h change > +0.3%, close SHORT and OPEN LONG immediately (buy\/long). If you have an open LONG and 1h change < -0.3%, close LONG and OPEN SHORT immediately (sell\/short). Reversal overrides intraday bearish indicators when the 1h trend is opposite to the open position.",
-    "   Do not enter if your scenario requires holding much longer.",
-    "   Учитывай среднее время удержания сделки: не планируй сделку на срок,",
-    "   заметно больший типичного удержания, если на то нет явных причин по данным.",
+    "ФОРМАТ ОТВЕТА (строго JSON, поля action/side/entryPrice/stopLoss/takeProfit/riskPercent ОБЯЗАТЕЛЬНЫ для исполнения):",
+    "{",
+    "  \"signal\": \"LONG | SHORT | NO_TRADE\",",
+    "  \"action\": \"buy | sell | hold\",",
+    "  \"side\": \"long | short | none\",",
+    "  \"confidence\": 0-100,",
+    "  \"score\": 0-100,",
+    "  \"market_regime\": \"...\",",
+    "  \"checklist\": {\"item\": true/false, ...},",
+    "  \"entry\": number|null,",
+    "  \"entryPrice\": number|null,",
+    "  \"stop_loss\": number|null,",
+    "  \"stopLoss\": number|null,",
+    "  \"take_profit\": number|null,",
+    "  \"takeProfit\": number|null,",
+    "  \"risk_reward\": number|null,",
+    "  \"position_size_pct\": number,",
+    "  \"riskPercent\": number,",
+    "  \"reasoning\": \"кратко, 2-3 предложения, только по фактам из данных\",",
+    "  \"invalidation\": \"что отменит сигнал\",",
+    "  \"missing_data\": [\"...\"]",
+    "}",
     "",
-    "ОТВЕТ: верни ТОЛЬКО валидный JSON без пояснений по схеме:",
-    `{"action": "buy"|"sell"|"hold", "side": "long"|"short"|"none", "confidence": 0-100, "entryPrice": number|null, "stopLoss": number|null, "takeProfit": number|null, "riskPercent": 0-100, "reasoning": "краткое обоснование"}`,
+    "Правила маппинга: signal LONG → action buy / side long;",
+    "signal SHORT → action sell / side short; signal NO_TRADE → action hold / side none.",
+    "entry → entryPrice; stop_loss → stopLoss; take_profit → takeProfit;",
+    "position_size_pct → riskPercent.",
   ].join("\n");
 }
 
