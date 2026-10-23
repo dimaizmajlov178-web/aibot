@@ -23,11 +23,17 @@ const SYMBOLS: readonly SymbolMeta[] = [
   { symbol: "ETH/USDT", basePrice: 3_200, baseVolume: 8_000 },
   { symbol: "SOL/USDT", basePrice: 150, baseVolume: 25_000 },
   { symbol: "BNB/USDT", basePrice: 580, baseVolume: 6_500 },
-  { symbol: "AAPL", basePrice: 210, baseVolume: 900 },
-  { symbol: "TSLA", basePrice: 240, baseVolume: 1_400 },
-  { symbol: "SBER", basePrice: 280, baseVolume: 1_100 },
-  { symbol: "NVDA", basePrice: 900, baseVolume: 1_300 },
+  { symbol: "XRP/USDT", basePrice: 0.5, baseVolume: 40_000 },
+  { symbol: "DOGE/USDT", basePrice: 0.15, baseVolume: 120_000 },
+  { symbol: "ADA/USDT", basePrice: 0.4, baseVolume: 35_000 },
+  { symbol: "AVAX/USDT", basePrice: 25, baseVolume: 8_000 },
+  { symbol: "LINK/USDT", basePrice: 12, baseVolume: 10_000 },
+  { symbol: "DOT/USDT", basePrice: 5, baseVolume: 12_000 },
+  { symbol: "LTC/USDT", basePrice: 65, baseVolume: 6_000 },
+  { symbol: "TRX/USDT", basePrice: 0.1, baseVolume: 50_000 },
+  { symbol: "SUI/USDT", basePrice: 1.2, baseVolume: 15_000 },
 ];
+
 
 const TIMEFRAME_MS: Record<Timeframe, number> = {
   "1m": 60_000,
