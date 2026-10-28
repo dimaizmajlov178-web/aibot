@@ -13,7 +13,7 @@ function money(value: number): string {
   });
 }
 
-function formatRecentCandles(context: MarketContext, count = 30): string {
+function formatRecentCandles(context: MarketContext, count = 200): string {
   const rows = context.candles
     .slice(-count)
     .map(
@@ -42,7 +42,7 @@ function formatMarketContext(context: MarketContext): string {
     `  CVD: ${round(ind.cvd)}`,
     `  Отклонение от VWAP: ${round(ind.vwapDeviation)}%`,
     "",
-    `Последние ${30} свечей:`,
+    `Последние ${200} свечей:`,
     formatRecentCandles(context),
   ].join("\n");
 }
@@ -64,6 +64,7 @@ function formatPortfolioContext(portfolio: PortfolioContext): string {
       `Среднее время удержания сделки: ${round(portfolio.avgHoldingTimeHours)} ч`
     );
   }
+
   if (portfolio.positions.length === 0) {
     lines.push("Открытых позиций: нет");
   } else {
@@ -83,12 +84,28 @@ function formatPortfolioContext(portfolio: PortfolioContext): string {
 
 function formatAssetHistory(context: MarketContext): string {
   const closes = context.candles.map((candle) => candle.close);
+  const now = closes[closes.length - 1] ?? 0;
+  const changePct = (hours: number): string => {
+    const idx = closes.length - 1 - Math.round((hours * 60) / 15);
+    const base = closes[Math.max(0, idx)] ?? 0;
+    if (!(base > 0) || !(now > 0)) {
+      return "нет данных";
+    }
+    const pct = ((now - base) / base) * 100;
+    return `${pct >= 0 ? "+" : ""}${round(pct)}%`;
+  };
   const start = closes[0] ?? 0;
   const end = closes[closes.length - 1] ?? 0;
   const change = start !== 0 ? ((end - start) / Math.abs(start)) * 100 : 0;
   const high = Math.max(...closes);
   const low = Math.min(...closes);
+
   return [
+    "ТРЕНД (изменение цены):",
+    `  За 1 час: ${changePct(1)}`,
+    `  За 6 часов: ${changePct(6)}`,
+    `  За 24 часа: ${changePct(24)}`,
+    "",
     "История по активу (за период выборки):",
     `  Первая цена: ${round(start)}`,
     `  Последняя цена: ${round(end)}`,
@@ -103,23 +120,8 @@ export function buildSignalPrompt(
   portfolio: PortfolioContext
 ): string {
   return [
-    "Ты — старший quantitative-аналитик с 15-летним опытом в крипто- и форекс-трейдинге.",
-    "Твоя задача — оценить данные и выдать торговый сигнал.",
-    "",
-    "ПРАВИЛА:",
-    "1. Используй ТОЛЬКО данные из контекста, не выдумывай.",
-    "2. Отвечай ТОЛЬКО валидным JSON без markdown и без пояснений.",
-    "3. Главный принцип: СЛЕДУЙ ТРЕНДУ. Тренд важнее перепроданности/перекупленности.",
-    "",
-    "РЕШАЮЩИЕ ПРАВИЛА (применяй в первую очередь):",
-    "1. НИСХОДЯЩИЙ ТРЕНД (цена < EMA50 и EMA20 < EMA50):",
-    "   если изменение за 1h < -0.2% и RSI < 60 → SHORT.",
-    "   Перепроданность (RSI 15-35) НЕ запрещает шорт: в нисходящем тренде шорти даже на перепроданности, стоп защитит.",
-    "2. ВОСХОДЯЩИЙ ТРЕНД (цена > EMA50 и EMA20 > EMA50):",
-    "   если изменение за 1h > +0.2% и RSI > 40 → LONG.",
-    "3. БОКОВИК (не выполнены 1-2): оцени по чек-листу ниже. score >= 55 → SIGNAL (входи),",
-    "   score 35-55 → WEAK_SIGNAL (входи, riskPercent 0.5-1.0), score < 35 → NO_TRADE.",
-    "4. ЗАПРЕЩЕНО открывать против тренда: лонг при нисходящем тренде, шорт при восходящем.",
+    "Ты — профессиональный трейдер алгоритмической торговли.",
+    "Твоя задача — принять решение по активу на основе предоставленных данных.",
     "",
     "КОНТЕКСТ РЫНКА:",
     formatMarketContext(context),
@@ -129,48 +131,22 @@ export function buildSignalPrompt(
     "СОСТОЯНИЕ ПОРТФЕЛЯ:",
     formatPortfolioContext(portfolio),
     "",
-    "ЧЕК-ЛИСТ (только если в боковике):",
-    "  [ ] Цена выше EMA200",
-    "  [ ] EMA20 > EMA50",
-    "  [ ] RSI в зоне 40-65",
-    "  [ ] MACD гистограмма растёт",
-    "  [ ] CVD согласуется с направлением",
-    "  [ ] Отклонение от VWAP по модулю < 2%",
-    "  [ ] Объём выше среднего",
-    "  [ ] ATR не в экстремуме",
+    "ПРАВИЛА:",
+    "1. Учитывай тренд, моментум и риск текущего портфеля.",
+    "2. Не открывай сделку, если это увеличит число позиций сверх максимума.",
+    "3. При входе всегда указывай stopLoss и takeProfit.",
+    "4. riskPercent не должен превышать лимит риска на сделку.",
+    "5. Стоп-лосс на бирже выставляется автоматически по настройке (стоп в % от",
+    "   цены входа), тейк-профит — по соотношению риска к прибыли (RR).",
+    "6. Prefer QUICK trades: close the position within 1-2 hours.",
+    "TREND BIAS OVERRIDE (symmetrical, 1h horizon): the bot trades on 15m candles and holds positions 1-2 hours, so the PRIMARY filter is the 1h change, not 24h. If 1h change > +0.3%: short-term trend UP, OPEN LONG (buy\/long), do NOT open SHORT. If 1h change < -0.3%: short-term trend DOWN, OPEN SHORT (sell\/short), do NOT open LONG. If between -0.3% and +0.3%: neutral, decide by indicators (RSI, MACD, EMA, volume, CVD) freely in both directions; use 6h and 24h changes only as secondary context.",
+    "POSITION REVERSAL: if you have an open SHORT on this symbol and 1h change > +0.3%, close SHORT and OPEN LONG immediately (buy\/long). If you have an open LONG and 1h change < -0.3%, close LONG and OPEN SHORT immediately (sell\/short). Reversal overrides intraday bearish indicators when the 1h trend is opposite to the open position.",
+    "   Do not enter if your scenario requires holding much longer.",
+    "   Учитывай среднее время удержания сделки: не планируй сделку на срок,",
+    "   заметно больший типичного удержания, если на то нет явных причин по данным.",
     "",
-    "УРОВНИ:",
-    "  - entry: текущая цена",
-    "  - stop_loss: для long ниже входа на 1.0-1.5 ATR; для short выше входа на 1.0-1.5 ATR",
-    "  - take_profit: на расстоянии risk_reward x стоп (минимум 2)",
-    "  - riskPercent: 1.0-2.0 для SIGNAL, 0.5-1.0 для WEAK_SIGNAL",
-    "",
-    "ФОРМАТ ОТВЕТА (поля action/side/entryPrice/stopLoss/takeProfit/riskPercent ОБЯЗАТЕЛЬНЫ):",
-    "{",
-    "  \"signal\": \"LONG | SHORT | NO_TRADE\",",
-    "  \"action\": \"buy | sell | hold\",",
-    "  \"side\": \"long | short | none\",",
-    "  \"confidence\": 0-100,",
-    "  \"score\": 0-100,",
-    "  \"market_regime\": \"trend_up | trend_down | range | high_volatility\",",
-    "  \"checklist\": {\"item\": true/false},",
-    "  \"entry\": number|null,",
-    "  \"entryPrice\": number|null,",
-    "  \"stop_loss\": number|null,",
-    "  \"stopLoss\": number|null,",
-    "  \"take_profit\": number|null,",
-    "  \"takeProfit\": number|null,",
-    "  \"risk_reward\": number|null,",
-    "  \"position_size_pct\": number,",
-    "  \"riskPercent\": number,",
-    "  \"reasoning\": \"кратко, 2-3 предложения, только по фактам\",",
-    "  \"invalidation\": \"что отменит сигнал\",",
-    "  \"missing_data\": []",
-    "}",
-    "",
-    "Маппинг: LONG → action buy / side long; SHORT → action sell / side short;",
-    "NO_TRADE → action hold / side none. WEAK_SIGNAL для LONG → buy; для SHORT → sell.",
-    "entry → entryPrice; stop_loss → stopLoss; take_profit → takeProfit; position_size_pct → riskPercent.",
+    "ОТВЕТ: верни ТОЛЬКО валидный JSON без пояснений по схеме:",
+    `{"action": "buy"|"sell"|"hold", "side": "long"|"short"|"none", "confidence": 0-100, "entryPrice": number|null, "stopLoss": number|null, "takeProfit": number|null, "riskPercent": 0-100, "reasoning": "краткое обоснование"}`,
   ].join("\n");
 }
 
